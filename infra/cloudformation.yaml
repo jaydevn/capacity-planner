@@ -116,6 +116,7 @@ Resources:
                   - ec2:DescribeInstances
                   - ec2:DescribeLaunchTemplateVersions
                   - ec2:DescribeRegions
+                  - pricing:GetProducts
                 Resource: "*"
 
   InstanceProfile:

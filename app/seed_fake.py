@@ -40,6 +40,51 @@ def seed_config() -> None:
             )
 
 
+def seed_target_groups() -> None:
+    """Attach 1-2 synthetic target groups per ASG so the detail page renders."""
+    now = int(time.time())
+    with db.get_conn() as conn:
+        conn.execute("DELETE FROM asg_target_groups")
+        for name, *_ in FAKE_ASGS:
+            short = name.replace("prod_", "")[:20]
+            tgs = [(f"tg-{short}-http", "HTTP", 80)]
+            if name.endswith(("gateway", "worker")):
+                tgs.append((f"tg-{short}-grpc", "HTTP", 8080))
+            for idx, (tg_name, proto, port) in enumerate(tgs):
+                arn = (
+                    f"arn:aws:elasticloadbalancing:{FAKE_REGION}:000000000000:"
+                    f"targetgroup/{tg_name}/{idx:016x}"
+                )
+                lb = [
+                    f"arn:aws:elasticloadbalancing:{FAKE_REGION}:000000000000:"
+                    f"loadbalancer/app/alb-{short}/{idx:016x}"
+                ]
+                conn.execute(
+                    """INSERT OR REPLACE INTO asg_target_groups
+                       (region, asg_name, tg_arn, tg_name, protocol, port,
+                        target_type, lb_arns, updated_at)
+                       VALUES (?, ?, ?, ?, ?, ?, 'instance', ?, ?)""",
+                    (FAKE_REGION, name, arn, tg_name, proto, port, __import__("json").dumps(lb), now),
+                )
+
+
+def seed_pricing() -> None:
+    """Populate the pricing cache from the fake rates so savings math is non-zero."""
+    now = int(time.time())
+    with db.get_conn() as conn:
+        seen: set[str] = set()
+        for _name, instance_type, _mn, _mx, _t, _ps, _si, rate in FAKE_ASGS:
+            if instance_type in seen:
+                continue
+            seen.add(instance_type)
+            conn.execute(
+                """INSERT OR REPLACE INTO pricing_cache
+                   (region, instance_type, hourly_rate_usd, source, updated_at)
+                   VALUES (?, ?, ?, 'fallback', ?)""",
+                (FAKE_REGION, instance_type, rate, now),
+            )
+
+
 def diurnal(minute_of_day: int) -> float:
     value = (minute_of_day - 14 * 60) / (24 * 60)
     return 0.20 + 0.75 * max(0.0, math.cos(value * math.pi * 2) * 0.5 + 0.5)
@@ -60,9 +105,15 @@ def seed_series(days: int = 45) -> None:
                     0.9 + 0.2 * math.sin(ts / 43200 + phase)
                 )
                 if not scale_in:
+                    # Scale-in disabled: instances stay high while real demand
+                    # drops — the classic over-provisioned shape. Per-instance
+                    # utilization runs well below target so reduce_util_gap fires.
                     demand = max(demand, minimum + (maximum - minimum) * 0.6)
+                    util_frac = 0.45 + 0.20 * shape  # ~45-65% of target
+                else:
+                    util_frac = 0.60 + 0.50 * shape  # ~60-110% of target
                 in_service = int(min(maximum, max(minimum, round(demand))))
-                request_count = target * (0.6 + 0.5 * shape) * random.uniform(0.9, 1.1)
+                request_count = target * util_frac * random.uniform(0.9, 1.1)
                 conn.execute(
                     """
                     INSERT OR REPLACE INTO asg_snapshots_1h
@@ -102,6 +153,8 @@ def seed_freshness() -> None:
 def main() -> None:
     db.init_db()
     seed_config()
+    seed_target_groups()
+    seed_pricing()
     seed_series()
     seed_freshness()
     now = datetime.now(tz=timezone.utc)

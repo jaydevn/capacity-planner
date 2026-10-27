@@ -140,9 +140,11 @@ Address each when the corresponding data starts to matter to your customer.
    usually finds the metric anyway, but for reliable results in accounts
    with many ALBs, resolve via `elbv2:DescribeTargetGroups.LoadBalancerArns[0]`
    and add the dimension.
-3. **On-demand hourly rates** — hardcoded in `HOURLY_RATE_USD` (top of
-   `pull_metrics.py`). Add rows for any instance families you run.
-   Swap for the Pricing API when ±10 % cost accuracy isn't enough.
+3. **On-demand hourly rates** — resolved from the **AWS Pricing API**
+   (`pricing:GetProducts`) by the poller and cached in the `pricing_cache`
+   table, so recommendation savings use live list prices. The static
+   `HOURLY_RATE_USD` dict in `pull_metrics.py` is only a fallback used when
+   the Pricing API is unreachable or has no match for an instance type.
 4. **No auth on Flask** — the dashboard is now fronted by an **internet-facing**
    ALB, so there is no network isolation by default. Before exposing real data,
    either tighten `ALLOWED_CIDR` to a trusted range, or add OIDC/Cognito

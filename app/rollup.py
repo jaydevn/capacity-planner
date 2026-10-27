@@ -177,6 +177,53 @@ def regenerate_recommendations() -> None:
         for row in rows:
             region = row["region"]
             asg_name = row["asg_name"]
+
+            # --- Close the utilization gap (the headline cost recommendation) ---
+            # For a target-tracking ASG, p95_utilization = avg_rcpt / tt_target,
+            # i.e. how close actual load runs to the configured ideal. When
+            # utilization sits well below target, the group is carrying more
+            # instances than demand needs. The "ideal" instance count scales
+            # linearly with utilization: ideal = current * (actual / target).
+            # The instances between current average and ideal are wasted, and
+            # their on-demand cost (from the Pricing-API-backed rate) is the
+            # estimated monthly saving.
+            util = row["p95_utilization"]
+            rate = row["hourly_rate_usd"] or 0.0
+            if (
+                row["tt_target"]
+                and util is not None
+                and 0 < util < 0.85
+                and (row["avg_in_service"] or 0) > 0
+            ):
+                current = row["avg_in_service"]
+                ideal = max(row["min_size"] or 1, math.ceil(current * util / 0.85))
+                shed = max(0.0, current - ideal)
+                savings = shed * rate * 730  # 730 h/month
+                if savings > 1 and shed >= 1:
+                    gap_pct = (0.85 - util)
+                    confidence = "high" if gap_pct > 0.3 else "medium"
+                    conn.execute(
+                        """INSERT INTO asg_recommendations
+                           (region, asg_name, category, headline, detail,
+                            estimated_savings_usd, confidence, generated_at)
+                           VALUES (?, ?, 'reduce_util_gap', ?, ?, ?, ?, ?)""",
+                        (
+                            region,
+                            asg_name,
+                            f"Right-size: utilization {util:.0%} vs 85% ideal",
+                            (
+                                f"Averaging {current:.1f} instances at {util:.0%} of the "
+                                f"TT target ({row['tt_target']:g} req/inst/min). Closing the "
+                                f"gap to an 85% ideal implies ~{ideal} instances, shedding "
+                                f"~{shed:.1f}. At ${rate:.4f}/h (AWS Pricing API) that is the "
+                                f"estimated monthly saving."
+                            ),
+                            savings,
+                            confidence,
+                            now,
+                        ),
+                    )
+
             if (
                 row["p95_utilization"] is not None
                 and row["p95_utilization"] < 0.4

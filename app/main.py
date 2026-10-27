@@ -10,6 +10,19 @@ from . import db
 
 app = Flask(__name__)
 
+
+@app.template_filter("from_json")
+def _from_json(value):
+    """Parse a JSON string stored in SQLite into a Python object for templates."""
+    import json as _json
+
+    if not value:
+        return []
+    try:
+        return _json.loads(value)
+    except (ValueError, TypeError):
+        return []
+
 SOURCE_LABELS = {
     "asg_config": "ASG config",
     "cw_metrics": "CloudWatch metrics",
@@ -41,13 +54,26 @@ def dashboard():
     )
     totals = db.query_one(
         """
-        SELECT SUM(estimated_cost_usd) AS cost,
-               SUM(peak_in_service) AS peak,
-               AVG(p95_utilization) AS util,
+        SELECT SUM(m.peak_in_service) AS peak,
+               AVG(m.p95_utilization) AS util,
                COUNT(*) AS asg_count
-        FROM asg_monthly_rollup WHERE month = ?
+        FROM asg_monthly_rollup m WHERE m.month = ?
         """,
         (month,),
+    )
+    # ASGs that have BOTH predictive scaling and target tracking enabled.
+    ps_tt = db.query_one(
+        """
+        SELECT COUNT(*) AS n
+        FROM asg_config
+        WHERE ps_enabled = 1 AND tt_target IS NOT NULL
+        """
+    )
+    # Count of ASGs that currently have at least one open recommendation,
+    # so the fleet KPI can link to where the opportunities are.
+    opps = db.query_one(
+        "SELECT COUNT(DISTINCT region || '/' || asg_name) AS n "
+        "FROM asg_recommendations WHERE status='open'"
     )
     months = [
         row["month"]
@@ -61,6 +87,8 @@ def dashboard():
         months=months,
         fleet=fleet,
         totals=totals,
+        ps_tt_count=ps_tt["n"] if ps_tt else 0,
+        opportunity_count=opps["n"] if opps else 0,
     )
 
 
@@ -77,12 +105,60 @@ def asg_detail(region: str, name: str):
            WHERE region=? AND asg_name=? ORDER BY month DESC LIMIT 12""",
         (region, name),
     )
+    target_groups = db.query(
+        """SELECT tg_name, protocol, port, target_type, lb_arns, tg_arn
+           FROM asg_target_groups WHERE region=? AND asg_name=?
+           ORDER BY tg_name""",
+        (region, name),
+    )
+    recs = db.query(
+        """SELECT * FROM asg_recommendations
+           WHERE region=? AND asg_name=? AND status='open'
+           ORDER BY estimated_savings_usd DESC""",
+        (region, name),
+    )
+    util = _utilization_stats(region, name, cfg["tt_target"])
     return render_template(
         "asg_detail.html",
         cfg=cfg,
         monthly=monthly,
+        target_groups=target_groups,
+        recs=recs,
+        rec_savings_total=sum(r["estimated_savings_usd"] or 0 for r in recs),
+        util=util,
         per_asg_freshness=_freshness_rows(region, name),
     )
+
+
+def _utilization_stats(region: str, name: str, tt_target: float | None) -> dict:
+    """Avg/peak utilization (actual req-per-target vs the TT target) over 30d.
+
+    Utilization is expressed as a fraction of the configured target-tracking
+    target: 1.0 means running exactly at target, <1.0 means over-provisioned.
+    """
+    since = int(time.time()) - 30 * 86400
+    row = db.query_one(
+        """
+        SELECT AVG(alb_rcpt_avg) AS avg_rcpt, MAX(alb_rcpt_max) AS peak_rcpt,
+               AVG(in_service_avg) AS avg_inst, MAX(in_service_max) AS peak_inst
+        FROM asg_snapshots_1h
+        WHERE region=? AND asg_name=? AND ts>=?
+        """,
+        (region, name, since),
+    )
+    avg_rcpt = row["avg_rcpt"] if row else None
+    peak_rcpt = row["peak_rcpt"] if row else None
+    avg_util = (avg_rcpt / tt_target) if (avg_rcpt is not None and tt_target) else None
+    peak_util = (peak_rcpt / tt_target) if (peak_rcpt is not None and tt_target) else None
+    return {
+        "avg_rcpt": avg_rcpt,
+        "peak_rcpt": peak_rcpt,
+        "avg_util": avg_util,
+        "peak_util": peak_util,
+        "avg_inst": row["avg_inst"] if row else None,
+        "peak_inst": row["peak_inst"] if row else None,
+        "tt_target": tt_target,
+    }
 
 
 @app.route("/recommendations")

@@ -25,6 +25,10 @@ DEFAULT_METRIC_PERIOD_SEC = int(os.environ.get("ASG_METRIC_PERIOD_SEC", "300"))
 RESOLUTION_TAG_KEY = os.environ.get("ASG_RESOLUTION_TAG_KEY", "AsgInsightsResolution")
 RESOLUTION_TAG_HIGH_RES_VAL = os.environ.get("ASG_RESOLUTION_TAG_HIGH_VAL", "1min")
 
+# Fallback on-demand rates used only when the AWS Pricing API is unreachable
+# or returns no price for a (region, instance_type). The poller caches real
+# Pricing API rates into the pricing_cache table on each run; these are the
+# last resort so cost/savings math never silently becomes $0.
 HOURLY_RATE_USD = {
     "m5.large": 0.096, "m5.xlarge": 0.192, "m5.2xlarge": 0.384,
     "m5.4xlarge": 0.768, "m5.8xlarge": 1.536, "m5.12xlarge": 2.304,
@@ -32,6 +36,101 @@ HOURLY_RATE_USD = {
     "r5.large": 0.126, "r5.xlarge": 0.252, "r5.2xlarge": 0.504,
     "t3.medium": 0.0416, "t3.large": 0.0832,
 }
+
+# The AWS Pricing API is only served from a few regions; us-east-1 carries the
+# global on-demand price list. Region names must be mapped to the "location"
+# long names the Pricing API filters on.
+PRICING_API_REGION = os.environ.get("ASG_PRICING_API_REGION", "us-east-1")
+_REGION_LOCATION = {
+    "us-east-1": "US East (N. Virginia)",
+    "us-east-2": "US East (Ohio)",
+    "us-west-1": "US West (N. California)",
+    "us-west-2": "US West (Oregon)",
+    "ca-central-1": "Canada (Central)",
+    "eu-west-1": "EU (Ireland)",
+    "eu-west-2": "EU (London)",
+    "eu-west-3": "EU (Paris)",
+    "eu-central-1": "EU (Frankfurt)",
+    "eu-north-1": "EU (Stockholm)",
+    "ap-south-1": "Asia Pacific (Mumbai)",
+    "ap-southeast-1": "Asia Pacific (Singapore)",
+    "ap-southeast-2": "Asia Pacific (Sydney)",
+    "ap-northeast-1": "Asia Pacific (Tokyo)",
+    "ap-northeast-2": "Asia Pacific (Seoul)",
+    "sa-east-1": "South America (Sao Paulo)",
+}
+
+
+def fetch_on_demand_rate(region: str, instance_type: str) -> tuple[float, str]:
+    """Return (hourly_usd, source) for a Linux on-demand instance.
+
+    Queries the AWS Pricing API (served from us-east-1). Falls back to the
+    static HOURLY_RATE_USD table when the API is unreachable or has no match.
+    """
+    location = _REGION_LOCATION.get(region)
+    if location:
+        try:
+            client = boto3.Session(region_name=PRICING_API_REGION).client("pricing")
+            response = client.get_products(
+                ServiceCode="AmazonEC2",
+                Filters=[
+                    {"Type": "TERM_MATCH", "Field": "instanceType", "Value": instance_type},
+                    {"Type": "TERM_MATCH", "Field": "location", "Value": location},
+                    {"Type": "TERM_MATCH", "Field": "operatingSystem", "Value": "Linux"},
+                    {"Type": "TERM_MATCH", "Field": "tenancy", "Value": "Shared"},
+                    {"Type": "TERM_MATCH", "Field": "capacitystatus", "Value": "Used"},
+                    {"Type": "TERM_MATCH", "Field": "preInstalledSw", "Value": "NA"},
+                ],
+                MaxResults=1,
+            )
+            for raw in response.get("PriceList", []):
+                price = _extract_on_demand_price(raw)
+                if price is not None:
+                    return price, "pricing_api"
+        except Exception as error:  # pragma: no cover - network/permission dependent
+            log.warning("Pricing API lookup failed for %s/%s: %s", region, instance_type, error)
+    return HOURLY_RATE_USD.get(instance_type, 0.0), "fallback"
+
+
+def _extract_on_demand_price(raw: str) -> float | None:
+    """Pull the USD on-demand per-hour price out of a Pricing API product JSON."""
+    product = json.loads(raw)
+    on_demand = product.get("terms", {}).get("OnDemand", {})
+    for term in on_demand.values():
+        for dim in term.get("priceDimensions", {}).values():
+            usd = dim.get("pricePerUnit", {}).get("USD")
+            try:
+                value = float(usd)
+            except (TypeError, ValueError):
+                continue
+            if value > 0:
+                return value
+    return None
+
+
+def cache_price(region: str, instance_type: str, rate: float, source: str) -> None:
+    with db.get_conn() as conn:
+        conn.execute(
+            """
+            INSERT INTO pricing_cache (region, instance_type, hourly_rate_usd, source, updated_at)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(region, instance_type) DO UPDATE SET
+              hourly_rate_usd=excluded.hourly_rate_usd,
+              source=excluded.source,
+              updated_at=excluded.updated_at
+            """,
+            (region, instance_type, rate, source, int(time.time())),
+        )
+
+
+def resolve_rate(session: boto3.Session, region: str, instance_type: str | None) -> float:
+    """Resolve the hourly rate for an instance type, caching the Pricing result."""
+    if not instance_type:
+        return 0.0
+    rate, source = fetch_on_demand_rate(region, instance_type)
+    if rate > 0:
+        cache_price(region, instance_type, rate, source)
+    return rate
 
 
 def _all_account_regions() -> list[str]:
@@ -109,7 +208,7 @@ def discover_asgs(session: boto3.Session) -> list[dict]:
                 "scale_in_enabled": None,
                 "tg_arns": json.dumps(group.get("TargetGroupARNs", [])),
                 "tags": json.dumps(tags),
-                "hourly_rate_usd": HOURLY_RATE_USD.get(instance_type or "", 0.0),
+                "hourly_rate_usd": resolve_rate(session, session.region_name, instance_type),
                 "metric_period_sec": period,
             })
     return out
@@ -132,6 +231,58 @@ def load_scaling_policies(session: boto3.Session, asg_name: str) -> dict:
         "ps_enabled": int(ps_enabled),
         "scale_in_enabled": int(scale_in_enabled),
     }
+
+
+def fetch_target_groups(session: boto3.Session, tg_arns: list[str]) -> list[dict]:
+    """Resolve target-group metadata (name, proto/port, type, LB ARNs)."""
+    if not tg_arns:
+        return []
+    client = session.client("elbv2")
+    out: list[dict] = []
+    # DescribeTargetGroups accepts up to 20 ARNs per call.
+    for i in range(0, len(tg_arns), 20):
+        batch = tg_arns[i : i + 20]
+        try:
+            response = client.describe_target_groups(TargetGroupArns=batch)
+        except Exception as error:
+            log.warning("DescribeTargetGroups failed for %s: %s", batch, error)
+            continue
+        for tg in response.get("TargetGroups", []):
+            out.append({
+                "tg_arn": tg["TargetGroupArn"],
+                "tg_name": tg.get("TargetGroupName"),
+                "protocol": tg.get("Protocol"),
+                "port": tg.get("Port"),
+                "target_type": tg.get("TargetType"),
+                "lb_arns": json.dumps(tg.get("LoadBalancerArns", [])),
+            })
+    return out
+
+
+def upsert_target_groups(region: str, asg_name: str, rows: list[dict]) -> None:
+    now = int(time.time())
+    with db.get_conn() as conn:
+        conn.execute(
+            "DELETE FROM asg_target_groups WHERE region=? AND asg_name=?",
+            (region, asg_name),
+        )
+        for row in rows:
+            conn.execute(
+                """
+                INSERT INTO asg_target_groups
+                  (region, asg_name, tg_arn, tg_name, protocol, port,
+                   target_type, lb_arns, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(region, asg_name, tg_arn) DO UPDATE SET
+                  tg_name=excluded.tg_name, protocol=excluded.protocol,
+                  port=excluded.port, target_type=excluded.target_type,
+                  lb_arns=excluded.lb_arns, updated_at=excluded.updated_at
+                """,
+                (
+                    region, asg_name, row["tg_arn"], row["tg_name"], row["protocol"],
+                    row["port"], row["target_type"], row["lb_arns"], now,
+                ),
+            )
 
 
 def _prior_policy_state(region: str, asg_name: str) -> dict:
@@ -432,6 +583,10 @@ def scan_region(region: str, start: datetime, end: datetime) -> int:
         name = cfg["asg_name"]
         target_groups = json.loads(cfg["tg_arns"])
         period_sec = cfg.get("metric_period_sec") or DEFAULT_METRIC_PERIOD_SEC
+        try:
+            upsert_target_groups(region, name, fetch_target_groups(session, target_groups))
+        except Exception:
+            log.exception("[%s] failed to resolve target groups for %s", region, name)
         try:
             rows = fetch_metrics(session, name, target_groups, start, end, period_sec)
             upsert_snapshots(rows, cfg.get("hourly_rate_usd") or 0.0, period_sec)

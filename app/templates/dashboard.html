@@ -16,9 +16,9 @@
 
 <section class="kpis">
   <div class="kpi">
-    <div class="k-label">Estimated cost</div>
-    <div class="k-value">${{ '{:,.0f}'.format(totals.cost or 0) }}</div>
-    <div class="k-sub">{{ totals.asg_count or 0 }} ASGs tracked</div>
+    <div class="k-label">ASGs with PS + TT</div>
+    <div class="k-value">{{ ps_tt_count }}</div>
+    <div class="k-sub">predictive scaling &amp; target tracking both on · {{ totals.asg_count or 0 }} tracked</div>
   </div>
   <div class="kpi">
     <div class="k-label">Peak instances</div>
@@ -28,12 +28,12 @@
   <div class="kpi">
     <div class="k-label">Avg utilization vs target</div>
     <div class="k-value">{{ '{:.0%}'.format(totals.util or 0) }}</div>
-    <div class="k-sub">across the fleet</div>
+    <div class="k-sub">from target-tracking metrics across ASGs</div>
   </div>
   <div class="kpi hint">
     <div class="k-label">Optimization opportunities</div>
-    <div class="k-value"><a href="{{ url_for('recommendations') }}">View →</a></div>
-    <div class="k-sub">auto-generated nightly</div>
+    <div class="k-value"><a href="{{ url_for('recommendations') }}">{{ opportunity_count }} ASG{{ '' if opportunity_count == 1 else 's' }} →</a></div>
+    <div class="k-sub">open per-ASG recommendations</div>
   </div>
 </section>
 
