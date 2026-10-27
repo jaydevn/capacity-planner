@@ -1,0 +1,12 @@
+[Unit]
+Description=Nightly retention rollup + monthly aggregate + recommendations
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=asginsights
+Group=asginsights
+WorkingDirectory=/opt/asg-insights
+Environment=ASG_INSIGHTS_DB=/var/lib/asg-insights/asg_insights.db
+Environment=PATH=/opt/asg-insights/.venv/bin
+ExecStart=/opt/asg-insights/.venv/bin/python -m app.rollup

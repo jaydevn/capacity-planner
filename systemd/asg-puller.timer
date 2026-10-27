@@ -1,0 +1,13 @@
+[Unit]
+Description=Run asg-puller every hour (CW metrics + PS forecast)
+
+[Timer]
+OnBootSec=2min
+# Hourly: PS refresh is every 6h upstream; hourly polling gives a 6x safety
+# margin without the GetMetricData bill of running every 15 min.
+OnUnitActiveSec=1h
+AccuracySec=1min
+Unit=asg-puller.service
+
+[Install]
+WantedBy=timers.target

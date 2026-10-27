@@ -1,0 +1,114 @@
+{% extends "base.html" %}
+{% block title %}Fleet — {{ month }}{% endblock %}
+{% block content %}
+<section class="page-head">
+  <h1>Fleet capacity — {{ month }}</h1>
+  <form method="get" class="month-picker">
+    <label>Month
+      <select name="month" onchange="this.form.submit()">
+        {% for m in months %}
+          <option value="{{ m }}" {% if m == month %}selected{% endif %}>{{ m }}</option>
+        {% endfor %}
+      </select>
+    </label>
+  </form>
+</section>
+
+<section class="kpis">
+  <div class="kpi">
+    <div class="k-label">Estimated cost</div>
+    <div class="k-value">${{ '{:,.0f}'.format(totals.cost or 0) }}</div>
+    <div class="k-sub">{{ totals.asg_count or 0 }} ASGs tracked</div>
+  </div>
+  <div class="kpi">
+    <div class="k-label">Peak instances</div>
+    <div class="k-value">{{ totals.peak or 0 }}</div>
+    <div class="k-sub">sum of per-ASG peaks</div>
+  </div>
+  <div class="kpi">
+    <div class="k-label">Avg utilization vs target</div>
+    <div class="k-value">{{ '{:.0%}'.format(totals.util or 0) }}</div>
+    <div class="k-sub">across the fleet</div>
+  </div>
+  <div class="kpi hint">
+    <div class="k-label">Optimization opportunities</div>
+    <div class="k-value"><a href="{{ url_for('recommendations') }}">View →</a></div>
+    <div class="k-sub">auto-generated nightly</div>
+  </div>
+</section>
+
+<section class="panel">
+  <div class="panel-head">
+    <h2>Fleet total — instances &amp; cost (last 90 days)</h2>
+    <span class="muted">hourly rollup</span>
+  </div>
+  <div id="fleetChart" style="width:100%;height:320px"></div>
+</section>
+
+<section class="panel">
+  <div class="panel-head">
+    <h2>ASGs by cost this month</h2>
+    <span class="muted">click a row for detail</span>
+  </div>
+  <table class="grid">
+    <thead>
+      <tr>
+        <th>ASG</th><th>Type</th><th>Peak</th><th>Avg</th>
+        <th>Util</th><th>Est. cost</th><th>vs prev mo</th><th>Policies</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in fleet %}
+      <tr onclick="location='{{ url_for('asg_detail', region=r.region, name=r.asg_name) }}'">
+        <td><b>{{ r.asg_name }}</b><div class="muted small">{{ r.region }}</div></td>
+        <td>{{ r.instance_type or '—' }}</td>
+        <td>{{ r.peak_in_service }}</td>
+        <td>{{ '{:.1f}'.format(r.avg_in_service or 0) }}</td>
+        <td>{{ '{:.0%}'.format(r.p95_utilization or 0) }}</td>
+        <td>${{ '{:,.0f}'.format(r.estimated_cost_usd or 0) }}</td>
+        <td class="{% if (r.prior_month_delta or 0) > 0 %}up{% elif (r.prior_month_delta or 0) < 0 %}down{% endif %}">
+          {% if r.prior_month_delta is not none %}
+            {{ '{:+,.0f}'.format(r.prior_month_delta) }}
+          {% else %}—{% endif %}
+        </td>
+        <td class="badges">
+          {% if r.ps_enabled %}<span class="badge ok">PS</span>{% else %}<span class="badge off">PS off</span>{% endif %}
+          {% if r.scale_in_enabled %}<span class="badge ok">scale-in</span>{% else %}<span class="badge warn">scale-in off</span>{% endif %}
+        </td>
+      </tr>
+      {% else %}
+      <tr><td colspan="8" class="empty">No data for {{ month }} — run the puller or <code>python -m app.seed_fake</code>.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+<script>
+fetch('/api/fleet/summary').then(r=>r.json()).then(data => {
+  const chart = echarts.init(document.getElementById('fleetChart'));
+  const pts = data.points || [];
+  const time = pts.map(p => p.ts * 1000);
+  const insts = pts.map(p => Math.round(p.instances || 0));
+  const cost = pts.map(p => (p.cost_hourly || 0).toFixed(2));
+  chart.setOption({
+    tooltip: { trigger: 'axis' },
+    legend: { data: ['Instances', 'Hourly cost ($)'], right: 12, top: 4 },
+    grid: { left: 44, right: 60, top: 34, bottom: 34 },
+    dataZoom: [{ type: 'inside' }, { type: 'slider', height: 20, bottom: 8 }],
+    xAxis: { type: 'time' },
+    yAxis: [
+      { type: 'value', name: 'Instances', splitLine: { lineStyle: { color: '#eef1f6' } } },
+      { type: 'value', name: '$/hr', position: 'right' },
+    ],
+    series: [
+      { name: 'Instances', type: 'line', showSymbol: false, smooth: true,
+        data: time.map((t,i) => [t, insts[i]]), lineStyle: { width: 2, color: '#3b7dd8' },
+        areaStyle: { color: 'rgba(59,125,216,0.10)' } },
+      { name: 'Hourly cost ($)', type: 'line', yAxisIndex: 1, showSymbol: false, smooth: true,
+        data: time.map((t,i) => [t, cost[i]]), lineStyle: { width: 2, color: '#e07a3b' } },
+    ],
+  });
+  window.addEventListener('resize', () => chart.resize());
+});
+</script>
+{% endblock %}

@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block title %}Scenarios{% endblock %}
+{% block content %}
+<section class="page-head">
+  <div>
+    <h1>Scaling behavior simulator</h1>
+    <div class="muted">Interactive model of Predictive Scaling + Target Tracking. Uses measured hourly demand.</div>
+  </div>
+</section>
+<section class="panel embed">
+  <p class="muted">
+    Simulator is embedded from the leadership demo. To edit, drop the updated HTML into
+    <code>app/static/simulator.html</code>.
+  </p>
+  <iframe src="{{ url_for('static', filename='simulator.html') }}" style="width:100%;height:960px;border:0;border-radius:8px"></iframe>
+</section>
+{% endblock %}

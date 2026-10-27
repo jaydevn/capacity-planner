@@ -1,0 +1,15 @@
+.venv/
+__pycache__/
+*.pyc
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+.env
+.DS_Store
+
+# artifacts pulled down during local install (should not ship)
+sessionmanager-bundle*/
+sessionmanager-bundle*.zip
+awscli.zip
+aws/

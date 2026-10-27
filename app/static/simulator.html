@@ -1,0 +1,487 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Evergent — ASG + ALB Auto Scaling Simulator (v2)</title>
+<style>
+  :root{--navy:#1F3864;--orange:#ED7D31;--teal:#2E8B8B;--green:#548235;--red:#C00000;--blue:#2562C4;--grey:#5b6b90;--card:#ffffff;--line:#d6deec;--ink:#1b2540;--bg:#f4f7fc;--panelbg:#fbfcfe;}
+  *{box-sizing:border-box;font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;}
+  body{margin:0;background:var(--bg);color:var(--ink);}
+  header{background:var(--navy);padding:12px 20px;}
+  header h1{margin:0;font-size:19px;color:#fff;}
+  header p{margin:3px 0 0;font-size:12px;color:#d6e0f0;}
+  .warn{color:#8a5a00;font-size:11px;margin-top:3px;}
+  .controls{display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:10px 20px;background:#eaf0f8;border-bottom:1px solid var(--line);}
+  button,select{background:#fff;color:var(--ink);border:1px solid #b9c6dd;border-radius:6px;padding:7px 11px;font-size:13px;cursor:pointer;}
+  button:hover{background:#eef3fa;}
+  button.primary{background:var(--orange);border-color:var(--orange);color:#111;font-weight:700;}
+  .tabs{display:flex;gap:6px;} .tab{padding:8px 13px;border-radius:8px;background:#fff;border:1px solid var(--line);cursor:pointer;font-size:13px;}
+  .tab.active{background:var(--navy);color:#fff;font-weight:700;border-color:var(--orange);}
+  label{font-size:12px;color:var(--grey);}
+  .scenario-note{font-size:12.5px;color:#7a5200;padding:8px 20px;background:#fff5e2;border-bottom:1px solid #f0dcae;}
+  .section-title{font-size:11px;color:var(--grey);text-transform:uppercase;letter-spacing:.6px;margin:0 0 8px;}
+
+  /* policy engine cards */
+  .engine{display:grid;grid-template-columns:1fr 1.15fr 1fr;gap:12px;padding:14px 20px 4px;}
+  .pcard{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px 14px;border-top:4px solid var(--line);box-shadow:0 1px 3px rgba(31,56,100,.06);}
+  .pcard.pred{border-top-color:var(--orange);} .pcard.tt{border-top-color:var(--teal);} .pcard.final{border-top-color:var(--green);}
+  .pcard h3{margin:0 0 8px;font-size:14px;} .pcard.pred h3{color:#c25f14;} .pcard.tt h3{color:#1f6b6b;} .pcard.final h3{color:#3f6b1f;}
+  .row{display:flex;justify-content:space-between;align-items:baseline;font-size:12.5px;padding:4px 0;border-bottom:1px dashed #e2e8f3;gap:8px;}
+  .row b{color:var(--ink);font-size:13px;text-align:right;} .big{font-size:26px;font-weight:800;}
+  .badge{display:inline-block;padding:2px 9px;border-radius:11px;font-size:11.5px;font-weight:700;}
+  .b-out{background:var(--red);color:#fff;} .b-in{background:var(--blue);color:#fff;} .b-hold{background:#8290ad;color:#fff;} .b-ok{background:var(--green);color:#fff;} .b-warn{background:var(--orange);color:#111;} .b-arm{background:#f3d3d3;color:#8a1c1c;} .b-armin{background:#d3e0f5;color:#1c3f7a;}
+  .alarm2{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:6px;}
+  .alarmbox{background:var(--panelbg);border:1px solid var(--line);border-radius:7px;padding:7px 8px;}
+  .alarmbox .t{font-size:10.5px;color:var(--grey);text-transform:uppercase;letter-spacing:.4px;}
+  .alarmbox.high{border-left:3px solid var(--red);} .alarmbox.low{border-left:3px solid var(--blue);}
+  .alarmbox .st{margin-top:4px;}
+  .cond{font-size:10.5px;color:#6b7ba0;margin-top:3px;font-family:ui-monospace,Menlo,Consolas,monospace;}
+  .formula{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11.5px;color:#2b3a5c;background:#eef3fa;border:1px solid #e2e8f3;border-radius:6px;padding:6px 8px;margin-top:6px;white-space:pre-wrap;line-height:1.45;}
+
+  .grid2{display:grid;grid-template-columns:1.25fr 1fr;gap:12px;padding:6px 20px 14px;}
+  .panel{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px 14px;box-shadow:0 1px 3px rgba(31,56,100,.06);}
+
+  /* CLEAN PIPELINE (replaces the old overlapping stage) */
+  .pipe{display:flex;align-items:stretch;gap:0;}
+  .stage2{flex:0 0 118px;background:var(--panelbg);border:1px solid var(--line);border-radius:8px;padding:8px;display:flex;flex-direction:column;justify-content:center;text-align:center;}
+  .stage2 .cap{font-size:10px;color:var(--grey);text-transform:uppercase;letter-spacing:.4px;}
+  .stage2 .v{font-size:16px;font-weight:800;color:var(--ink);margin-top:2px;} .stage2 .s{font-size:10.5px;color:#6b7ba0;margin-top:2px;}
+  .stage2.alb{border-color:var(--orange);} .stage2.tg{border-color:var(--blue);} .stage2.met{border-color:var(--teal);}
+  .arrow{flex:0 0 26px;display:flex;align-items:center;justify-content:center;color:#8ba0c6;font-size:20px;}
+  .asgbox{flex:1;border:2px dashed #9db3d8;border-radius:8px;padding:8px 8px 6px;min-height:150px;background:var(--panelbg);}
+  .asghead{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px;margin-bottom:6px;}
+  .asghead .nm{font-size:11px;color:var(--grey);font-weight:700;}
+  .capchip{font-size:10.5px;background:#fff;border:1px solid var(--line);border-radius:6px;padding:2px 7px;}
+  .capchip b{color:var(--ink);}
+  .fleet{display:flex;flex-wrap:wrap;align-content:flex-start;}
+  .inst{width:20px;height:20px;border-radius:4px;display:inline-block;margin:2px;transition:all .3s;border:1px solid rgba(0,0,0,.12);}
+  .inservice{background:var(--green);} .launching{background:var(--orange);} .terminating{background:var(--red);opacity:.5;}
+  .chips{display:flex;gap:8px;margin-top:8px;flex-wrap:wrap;}
+  .chip{background:var(--panelbg);border:1px solid var(--line);border-radius:8px;padding:6px 10px;font-size:12px;}
+  .chip b{font-size:18px;display:block;}
+  canvas{width:100%;background:#fff;border-radius:8px;border:1px solid var(--line);}
+  .legend{font-size:11px;color:var(--grey);margin-top:6px;} .legend span{margin-right:10px;white-space:nowrap;}
+  .dot{display:inline-block;width:10px;height:10px;border-radius:2px;vertical-align:middle;margin-right:3px;}
+  .log{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11px;background:#0f1a2e;border:1px solid #223052;border-radius:8px;padding:8px;height:150px;overflow:auto;white-space:pre-wrap;line-height:1.45;color:#cdd8ee;}
+  footer{padding:10px 20px;font-size:10.5px;color:#6b7ba0;border-top:1px solid var(--line);background:#eaf0f8;}
+  a{color:#1f5fbf;}
+  .hourpill{background:#fff3e6;border:1px solid var(--orange);border-radius:20px;padding:3px 10px;font-size:12px;color:#b25a12;}
+</style>
+</head>
+<body>
+<header>
+  <h1>Evergent — ASG + ALB Auto Scaling Simulator <span style="font-size:12px;color:#9fb0d4;">v2 · corrected model</span></h1>
+  <p>Account 868776052686 · Predictive Scaling (hourly planner) + Target Tracking (per-minute reactor) · single-TG vs multi-TG</p>
+  <p class="warn">⚠️ AI-generated teaching simulation of documented AWS behavior (not a byte-exact control-plane reproduction). ALB curve driven by Evergent's own measured hourly demand. Verify before customer use.</p>
+</header>
+
+<div class="controls">
+  <div class="tabs">
+    <div class="tab active" data-env="single" onclick="selectEnv('single')">SINGLE TG · cy_t2 (real hourly data)</div>
+    <div class="tab" data-env="multi" onclick="selectEnv('multi')">MULTI TG · cy_r_common (6 TGs)</div>
+  </div>
+  <span style="width:10px"></span>
+  <label>Day scenario</label>
+  <select id="scenario" onchange="loadScenario()">
+    <option value="normal">Normal predictable day (measured curve)</option>
+    <option value="flash">Surprise flash spike (forecast never saw it)</option>
+    <option value="zero">Evening drain to near-zero</option>
+    <option value="gap">ALB metric gap (insufficient data window)</option>
+    <option value="beyondmax">Demand beyond MAX ceiling</option>
+    <option value="noscalein">Scale-in DISABLED (today's live state)</option>
+  </select>
+  <label>Predictive mode</label>
+  <select id="predmode" onchange="setPredMode()">
+    <option value="scale">Forecast &amp; Scale (recommended)</option>
+    <option value="only">Forecast Only (live today — inert)</option>
+  </select>
+  <span style="width:6px"></span>
+  <button class="primary" id="playBtn" onclick="togglePlay()">▶ Play day</button>
+  <button onclick="stepOnce()">Step +1 min ▸</button>
+  <button onclick="skipHour()">Skip +1 h ⏭</button>
+  <button onclick="resetSim()">↺ Reset</button>
+  <label>Speed</label>
+  <select id="speed" onchange="setSpeed()"><option value="1200">Very slow</option><option value="700" selected>Slow</option><option value="350">Normal</option><option value="140">Fast</option><option value="45">Very fast</option></select>
+  <span style="margin-left:auto;font-size:13px;color:#fff">🕐 <b id="clock">00:00 UTC</b></span>
+</div>
+<div class="scenario-note" id="scenNote"></div>
+
+<!-- POLICY ENGINE -->
+<div class="engine">
+  <!-- PREDICTIVE (hourly) -->
+  <div class="pcard pred">
+    <h3>① Predictive Scaling <span style="font-size:11px;color:var(--grey)">— fixed plan set ahead, scales OUT only</span></h3>
+    <div class="row"><span>Mode</span><b id="pMode">—</b></div>
+    <div class="row"><span>Plan</span><b><span class="hourpill" id="pCadence">24 h forecast · fixed ahead</span></b></div>
+    <div class="row"><span>Predicted capacity — this hour</span><b id="pThis" class="big" style="color:var(--orange)">—</b></div>
+    <div class="row"><span>Next hour (already in the plan)</span><b id="pNext">—</b></div>
+    <div class="row"><span>Peak planned today</span><b id="pPeak">—</b></div>
+    <div class="row"><span>Pre-launched at</span><b id="pSetAt">—</b></div>
+    <div class="formula" id="pForm">The whole 24 h forecast is FIXED ahead of time (shaded band on the chart) — it does NOT rise with live load.
+Each hour it pre-warms that hour's planned capacity, launched 900 s (~15 min) early. Refreshed every 6 h.</div>
+  </div>
+
+  <!-- TARGET TRACKING (two alarms) -->
+  <div class="pcard tt">
+    <h3>② Target Tracking <span style="font-size:11px;color:var(--grey)">— reactor: fast scale-out, gradual scale-in</span></h3>
+    <div class="row"><span>RequestCountPerTarget (RCPT)</span><b id="tMetric">—</b></div>
+    <div class="row"><span>Target</span><b id="tTarget">—</b></div>
+    <div class="alarm2">
+      <div class="alarmbox high">
+        <div class="t">🔴 Scale-OUT alarm (High)</div>
+        <div class="st" id="aHigh"><span class="badge b-ok">OK</span></div>
+        <div class="cond">RCPT &gt; target · 3 × 1-min → ADD</div>
+      </div>
+      <div class="alarmbox low">
+        <div class="t">🔵 Scale-IN alarm (Low)</div>
+        <div class="st" id="aLow"><span class="badge b-ok">OK</span></div>
+        <div class="cond">RCPT &lt; target−10% · 15×1-min → REMOVE gradually (1 step / cooldown, never past safe floor)</div>
+      </div>
+    </div>
+    <div class="row" style="margin-top:6px"><span>Target tracking wants</span><b id="tWants" class="big" style="color:var(--teal)">—</b></div>
+    <div class="formula" id="tForm">desired_TT = ceil( InService × RCPT ÷ target )  — reacts to live load</div>
+  </div>
+
+  <!-- FINAL -->
+  <div class="pcard final">
+    <h3>③ ASG Desired <span style="font-size:11px;color:var(--grey)">— the HIGHER wins; predictive = floor</span></h3>
+    <div class="row"><span>max( Predictive , Target Tracking )</span><b id="fMax">—</b></div>
+    <div class="row"><span>Clamp to [min … max]</span><b id="fClamp">—</b></div>
+    <div class="row"><span>Action this minute</span><b id="fAction">—</b></div>
+    <div class="row"><span>DESIRED capacity</span><b id="fDesired" class="big" style="color:#3f7d1f">—</b></div>
+    <div class="formula" id="fForm">desired = clamp( max(PS_hour, TT_now), min, max )</div>
+  </div>
+</div>
+
+<div class="grid2">
+  <div class="panel">
+    <p class="section-title">Request path &amp; fleet — ALB ▸ Target Group ▸ CloudWatch metric ▸ ASG</p>
+    <div class="pipe">
+      <div class="stage2 alb"><div class="cap">ALB</div><div class="v" id="albReq">0</div><div class="s">requests / min</div></div>
+      <div class="arrow">▸</div>
+      <div class="stage2 tg"><div class="cap" id="tgCap">Target Group</div><div class="v" id="tgN">1</div><div class="s" id="tgS">target group</div></div>
+      <div class="arrow">▸</div>
+      <div class="stage2 met"><div class="cap">RCPT metric</div><div class="v" id="metV">0</div><div class="s" id="metS">vs 3500</div></div>
+      <div class="arrow">▸</div>
+      <div class="asgbox">
+        <div class="asghead">
+          <span class="nm" id="asgLbl">ASG</span>
+          <span>
+            <span class="capchip">min <b id="hMin">0</b></span>
+            <span class="capchip">desired <b id="hDes" style="color:#3f7d1f">0</b></span>
+            <span class="capchip">max <b id="hMax">0</b></span>
+          </span>
+        </div>
+        <div class="fleet" id="fleet"></div>
+      </div>
+    </div>
+    <div class="chips">
+      <div class="chip" style="border-color:var(--green)"><b id="cIn" style="color:#3f7d1f">0</b>InService (counted)</div>
+      <div class="chip" style="border-color:var(--orange)"><b id="cLaunch" style="color:var(--orange)">0</b>Launching (warming, excluded)</div>
+      <div class="chip" style="border-color:var(--red)"><b id="cTerm" style="color:#c00">0</b>Terminating (draining)</div>
+      <div class="chip"><b id="cDesired" style="color:var(--ink)">0</b>Desired</div>
+    </div>
+    <div class="legend">
+      <span><span class="dot" style="background:#548235"></span>InService — serving &amp; in the metric</span>
+      <span><span class="dot" style="background:#ED7D31"></span>Launching/warming — not yet in metric, blocks scale-in</span>
+      <span><span class="dot" style="background:#C00000"></span>Terminating — draining (ALB dereg ~120 s)</span>
+    </div>
+  </div>
+  <div class="panel">
+    <p class="section-title">24-hour timeline (UTC) — metric, predicted capacity &amp; running fleet</p>
+    <canvas id="chart" width="820" height="230"></canvas>
+    <div class="legend">
+      <span><span class="dot" style="background:#2E8B8B"></span>RCPT metric</span>
+      <span><span class="dot" style="background:#1b2540"></span>target</span>
+      <span><span class="dot" style="background:#ED7D31"></span>Predicted capacity — fixed 24 h plan (set ahead)</span>
+      <span><span class="dot" style="background:#e0932b"></span>Desired</span>
+      <span><span class="dot" style="background:#548235"></span>Running (InService)</span>
+      <span><span class="dot" style="background:#C00000"></span>min / max</span>
+    </div>
+  </div>
+</div>
+
+<div class="grid2" style="padding-top:0;">
+  <div class="panel">
+    <p class="section-title">Evaluation log (newest first)</p>
+    <div class="log" id="log"></div>
+  </div>
+  <div class="panel">
+    <p class="section-title">Configuration (live-verified 2026-09-02)</p>
+    <div id="cfgBox" style="font-size:12.5px;line-height:1.7;"></div>
+  </div>
+</div>
+
+<details id="prov" open style="margin:0 20px 16px;background:var(--card);border:1px solid var(--line);border-radius:10px;box-shadow:0 1px 3px rgba(31,56,100,.06);">
+  <summary style="cursor:pointer;padding:12px 14px;font-weight:700;color:var(--navy);font-size:14px;">Where these numbers come from — baseline &amp; sources (for the demo)</summary>
+  <div style="padding:0 14px 14px;font-size:12.5px;line-height:1.5;">
+    <p style="margin:4px 0 10px;color:#41506f;">Every baseline is read from Evergent's own account or the recommended policy — nothing is invented. Sources: the workbook <b>Evergent_ASG_Hourly_OverUnder_Provisioning_2026-09-02.xlsx</b> and the CloudFormation policy <b>cy_r_common_multiTG_scaling.yaml</b>, plus documented AWS defaults.</p>
+    <table style="width:100%;border-collapse:collapse;font-size:12px;">
+      <thead><tr style="text-align:left;color:var(--grey);border-bottom:2px solid var(--line);">
+        <th style="padding:6px 8px;">Number</th><th style="padding:6px 8px;">Value (cy_t2 / cy_r_common)</th><th style="padding:6px 8px;">Where it comes from</th></tr></thead>
+      <tbody>
+        <tr style="border-bottom:1px solid #eef2f8;"><td style="padding:6px 8px;"><b>Target</b> (req/instance/min)</td><td style="padding:6px 8px;">3500 / 535</td><td style="padding:6px 8px;">The customer's <b>own current</b> target-tracking <code>TargetValue</code>, read live from each ASG's existing policy — workbook tab <i>"TT + Predictive Optim" → "TT target (cur)"</i>. Recommendation: <b>keep</b>, validate against a p99-latency SLO test. (cy_r_common target 535 confirmed in <code>cy_r_common_multiTG_scaling.yaml → PerInstanceTarget</code>.)</td></tr>
+        <tr style="border-bottom:1px solid #eef2f8;"><td style="padding:6px 8px;"><b>Predictive target</b></td><td style="padding:6px 8px;">3500 / 535 (recommended)</td><td style="padding:6px 8px;">Today it is <b>misaligned</b> (cy_t2 PS=2800, cy_r_common PS=450 — "Aligned? NO"). Recommendation: set predictive target = target-tracking target so the two agree.</td></tr>
+        <tr style="border-bottom:1px solid #eef2f8;"><td style="padding:6px 8px;"><b>Metric</b></td><td style="padding:6px 8px;">RCPT / Σ RCPT × 6 TGs</td><td style="padding:6px 8px;"><code>ALBRequestCountPerTarget</code> = ALB requests ÷ healthy targets, per minute. 1 target group → predefined metric; multiple TGs → <b>sum</b> across them via metric math (CloudFormation).</td></tr>
+        <tr style="border-bottom:1px solid #eef2f8;"><td style="padding:6px 8px;"><b>MIN / MAX</b></td><td style="padding:6px 8px;">10&nbsp;/&nbsp;80 · 15&nbsp;/&nbsp;64</td><td style="padding:6px 8px;">Workbook tab <i>"Action Plan (per ASG)"</i>. MIN floors lowered only for reader tiers with memory headroom (cy_t2 7-day memory peak 64% → "LOWER to 10"); memory-bound writers keep their floor. MAX ≈ observed peak instance count.</td></tr>
+        <tr style="border-bottom:1px solid #eef2f8;"><td style="padding:6px 8px;"><b>Demand-needed</b></td><td style="padding:6px 8px;">derived per hour</td><td style="padding:6px 8px;"><code>Actual InService × (RCPT_per_min ÷ target)</code> — the exact ratio target tracking uses. Validated on cy_t2: at peak, needed ~78 vs actually ran ~80.</td></tr>
+        <tr style="border-bottom:1px solid #eef2f8;"><td style="padding:6px 8px;"><b>Hourly ALB curve</b></td><td style="padding:6px 8px;">measured (cy_t2)</td><td style="padding:6px 8px;">Real <code>ALBRequestCountPerTarget</code> from CloudWatch, 7 days — workbook tab <i>"cy_t2 Hourly (flagship)"</i> (day shown: 2026-08-26 UTC). This drives the ALB request line in the sim.</td></tr>
+        <tr style="border-bottom:1px solid #eef2f8;"><td style="padding:6px 8px;"><b>Target-tracking capacity</b></td><td style="padding:6px 8px;">formula</td><td style="padding:6px 8px;"><code>desired = ceil( InService × RCPT ÷ target )</code> — the AWS target-tracking capacity calculation (keeps the metric at target). Only acts when an alarm fires.</td></tr>
+        <tr style="border-bottom:1px solid #eef2f8;"><td style="padding:6px 8px;"><b>Two policies together</b></td><td style="padding:6px 8px;">higher wins</td><td style="padding:6px 8px;">Each policy computes capacity independently; the ASG uses the <b>higher</b> value. Predictive scales OUT only, so it acts as a floor that blocks target-tracking scale-in below the plan. <i>(AWS Compute Blog: "the desired capacity is set to the higher value"; predictive "does not scale-in".)</i></td></tr>
+        <tr style="border-bottom:1px solid #eef2f8;"><td style="padding:6px 8px;"><b>Scale-in behaviour</b></td><td style="padding:6px 8px;">gradual, conservative</td><td style="padding:6px 8px;">Target tracking is more aggressive adding than removing: it only scales in past a ~10% deadband, <b>won't remove a unit if that would push the metric back above target</b>, and spaces activities by a cooldown (~900s) — so capacity steps down gradually. <i>(AWS target-tracking overview.)</i></td></tr>
+        <tr><td style="padding:6px 8px;"><b>900s buffer · 3/15 breaches · 10% band</b></td><td style="padding:6px 8px;">AWS defaults</td><td style="padding:6px 8px;">Not customer-specific. Pre-launch buffer ≥ instance warm-up (~700–750s); scale-out ~3×1-min, scale-in ~15×1-min with a ~10% deadband — documented AWS behavior.</td></tr>
+      </tbody>
+    </table>
+  </div>
+</details>
+
+<footer>
+Modeled per AWS docs: <b>Predictive scaling</b> generates an <i>hourly</i> forecast for the next 48 h (refreshed every 6 h) and sets predicted capacity <i>at the start of each hour</i>, optionally pre-launching by <code>SchedulingBufferTime</code> (900 s here); it scales OUT only.
+<b>Target tracking</b> creates two managed CloudWatch alarms — a High alarm (scale-out, ~3×1-min breach) and a Low alarm (scale-in, ~15×1-min breach, ~10% band); warming instances are excluded from the metric and block scale-in; no scaling on insufficient data.
+When both run, <code>desired = clamp( max(predicted, target-tracking), min, max )</code> — the HIGHER value always wins, so predictive acts as a <b>floor</b> that blocks target-tracking scale-in below the plan (predictive never scales in).
+Target-tracking <b>scale-in is conservative</b>: it removes capacity only past a ~10% deadband, never so much that the metric would rise back above target ("won't remove a unit if it would breach"), and one step per cooldown (~900 s) — so capacity steps down gradually instead of dropping to a single computed number.
+Sources: docs.aws.amazon.com/autoscaling predictive-scaling-policy-overview &amp; target-tracking-scaling-policy-overview; AWS Compute Blog "Introducing Native Support for Predictive Scaling". ⚠️ AI-generated — verify before sharing.
+</footer>
+
+<script>
+/* ---- documented constants ---- */
+const LAUNCH_TO_INSVC=12, DRAIN_MIN=2, OUT_BREACH=3, IN_BREACH=15, IN_MARGIN=0.90, BUFFER_MIN=15, SCALE_IN_COOLDOWN=15, DAY=1440;
+
+/* real measured hourly DEMAND-NEEDED (instances) — cy_t2 flagship, 2026-08-26 UTC, from
+   Evergent_ASG_Hourly_OverUnder_Provisioning_2026-09-02.xlsx ("cy_t2 Hourly (flagship)" tab).
+   demand-needed = Actual InService × (RCPT_per_min ÷ target) — the exact ratio target tracking uses. */
+const DEMAND_CY_T2=[1.5,2.7,4.9,6.2,19,21.1,17.7,20.7,21.6,18.8,22.6,14.6,14.1,15.1,21.6,40,33,20.2,11,4.2,1.9,1,0.8,0.9];
+/* cy_r_common (6 TGs): representative daily shape consistent with measured 7-day aggregate
+   (avg demand ~18, peak ~44). Hourly per-TG demand not separately measured — shape only. */
+const DEMAND_CY_R=[8,7,6,6,7,9,12,16,20,24,28,32,36,40,44,42,38,33,28,23,18,14,11,9];
+
+const ENVS={
+  single:{name:"prod_ums_cy_t2 (ap-south-1, m5.4xlarge, 1 TG)",tgCount:1,target:3500,min:10,max:80,liveMin:15,
+    metric:"ALBRequestCountPerTarget (predefined)",build:"Console (predefined pair)",demand:DEMAND_CY_T2,measured:true},
+  multi:{name:"prod_nv_ums_cy_r_common (us-east-1, m5.4xlarge, 6 TGs)",tgCount:6,target:535,min:15,max:64,liveMin:36,
+    metric:"Σ RequestCountPerTarget over 6 TGs (metric math)",build:"CloudFormation (custom metric)",demand:DEMAND_CY_R,measured:false}
+};
+
+/* interpolate the measured hourly demand into a smooth per-minute total-request curve */
+function baseTotalAt(env,min){
+  const c=ENVS[env],d=c.demand;
+  const h=Math.floor(min/60)%24, f=(min%60)/60, hn=(h+1)%24;
+  let dem=d[h]*(1-f)+d[hn]*f;                 // instances-needed, interpolated
+  dem*= (1 + 0.03*Math.sin(min/11));          // mild realistic jitter
+  return Math.max(0,dem)*c.target;            // total requests / min
+}
+
+function scenarios(env){return{
+  normal:{note:"Predictable measured day. Predictive pre-warms the daily climb (hourly steps set 15 min early); Target Tracking fine-tunes and trims after each peak.",tot:t=>baseTotalAt(env,t),insufficient:()=>false},
+  flash:{note:"Surprise flash spike at 10:00–10:25 the forecast never saw. Predictive holds its hourly plan; the Scale-OUT alarm fires after 3 min and Target Tracking catches up (~3-min alarm + ~12-min warm-up late) → brief SLA-risk window.",tot:t=>(t>=600&&t<625)?baseTotalAt(env,t)*9:baseTotalAt(env,t),insufficient:()=>false},
+  zero:{note:"Evening traffic drains toward zero after 18:00. The Scale-IN (Low) alarm holds for 15 one-minute periods, then Target Tracking removes instances — never below MIN.",tot:t=>t<1080?baseTotalAt(env,t):baseTotalAt(env,t)*Math.max(0.02,1-(t-1080)/120),insufficient:()=>false},
+  gap:{note:"ALB stops publishing RCPT (insufficient data) 11:00–12:00. Documented behaviour: NO scaling — capacity is HELD at the last value; both alarms go to INSUFFICIENT_DATA.",tot:t=>baseTotalAt(env,t),insufficient:t=>t>=660&&t<720},
+  beyondmax:{note:"Midday demand exceeds the MAX ceiling. Capacity CAPS at MAX; RCPT stays ABOVE target (SLA risk). Predictive HonorMaxCapacity also refuses to exceed MAX.",tot:t=>(t>=720&&t<960)?baseTotalAt(env,t)*3.2:baseTotalAt(env,t),insufficient:()=>false},
+  noscalein:{note:"Scale-in DISABLED (today's live state). The Scale-IN alarm still goes into ALARM but takes no action → capacity ratchets UP on every peak and NEVER falls back = sustained over-provisioning.",tot:t=>baseTotalAt(env,t),insufficient:()=>false,noScaleIn:true}
+};}
+
+let env='single',scen='normal',predMode='scale',S=null,timer=null,speed=700;
+const clamp=(v,lo,hi)=>Math.max(lo,Math.min(hi,v));
+const fmt=n=>n>=1000?(n/1000).toFixed(1)+'k':Math.round(n);
+const hhmm=m=>String(Math.floor(m/60)%24).padStart(2,'0')+':'+String(Math.floor(m)%60).padStart(2,'0');
+const cs=(a,st)=>a.filter(i=>i.state===st).length;
+const inSvc=a=>cs(a,'inservice'), pend=a=>cs(a,'launching');
+
+/* hourly predictive forecast (instances), computed once per hour, HELD for the hour */
+function forecastForHour(env,h){const c=ENVS[env];return clamp(Math.ceil(c.demand[((h%24)+24)%24]),c.min,c.max);}
+/* which hour's forecast is ACTIVE at minute m — pre-launch buffer pulls the next hour in early */
+function predictedActive(env,m){
+  const c=ENVS[env];
+  const effHour=Math.floor((m+BUFFER_MIN)/60);   // buffer brings next hour forward
+  return forecastForHour(env,effHour);
+}
+
+function freshState(){const c=ENVS[env];const insts=[];for(let i=0;i<c.min;i++)insts.push({state:'inservice',age:99});
+  return{t:0,insts,desired:c.min,outBreach:0,inBreach:0,cooldownUntil:-999,note:'',hist:[],log:[]};}
+
+function stepSim(){
+  const c=ENVS[env],sc=scenarios(env)[scen],t=S.t%DAY;
+  const insufficient=sc.insufficient(t), total=sc.tot(t);
+  const serve=Math.max(1,inSvc(S.insts));
+  const metric=insufficient?null:total/serve;
+  const scaleInAllowed=!sc.noScaleIn;
+
+  // ---- Target tracking: reactive, computed per the recommended/lab policy ----
+  //   AWS target-tracking capacity formula: newCapacity = ceil( InServiceCapacity × metric ÷ TargetValue )
+  //   metric = ΣRequestCountPerTarget (per-instance). Verified vs cy_r_common_multiTG_scaling.yaml (TargetValue 535)
+  //   and the cy_t2 predefined pair (TargetValue 3500).
+  const serveNow=inSvc(S.insts)||1;
+  const ttCalc=insufficient?null:clamp(Math.ceil(serveNow*metric/c.target),c.min,c.max);
+  let ttWants=S.desired, action='hold', aClass='b-hold';
+  let highState='OK',highCls='b-ok',lowState='OK',lowCls='b-ok';
+  let log=hhmm(t)+'  RCPT='+(metric==null?'—':metric.toFixed(0)), scaleInWanted=false;
+  S.note='';
+
+  if(insufficient){
+    S.outBreach=0;S.inBreach=0;highState='INSUFFICIENT';highCls='b-hold';lowState='INSUFFICIENT';lowCls='b-hold';
+    log+='  · insufficient data → HOLD at '+S.desired;
+  } else {
+    if(metric>c.target){                                  // HIGH alarm path — aggressive, immediate
+      S.outBreach++;S.inBreach=0;
+      if(S.outBreach>=OUT_BREACH){highState='ALARM';highCls='b-out';ttWants=ttCalc;S.outBreach=0;
+        log+='  · 🔴 Scale-OUT ALARM → ceil('+serveNow+'×'+metric.toFixed(0)+'/'+c.target+')='+ttCalc;}
+      else{highState='breaching '+S.outBreach+'/'+OUT_BREACH;highCls='b-arm';log+='  · High alarm breaching '+S.outBreach+'/'+OUT_BREACH;}
+    } else if(metric<c.target*IN_MARGIN){                 // LOW alarm path — conservative, gradual, cooldown-gated
+      S.inBreach++;S.outBreach=0;
+      if(S.inBreach>=IN_BREACH){lowState='ALARM';lowCls='b-in';scaleInWanted=(ttCalc<serveNow);
+        if(!scaleInAllowed){log+='  · 🔵 Scale-IN ALARM but scale-in DISABLED → no action';}
+        else if(pend(S.insts)>0){log+='  · 🔵 Scale-IN ALARM but BLOCKED (instances still warming up)';}
+        else if(t<S.cooldownUntil){log+='  · 🔵 Scale-IN ALARM — in cooldown until '+hhmm(S.cooldownUntil)+' (gradual, one step per cooldown)';}
+        else if(ttCalc>=serveNow){log+='  · 🔵 Scale-IN ALARM — holding: removing an instance would push RCPT back above target';}
+        else{ // one conservative step toward the safe floor; never below ceil(total/target) so metric stays ≤ target
+          ttWants=ttCalc;S.cooldownUntil=t+SCALE_IN_COOLDOWN;
+          log+='  · 🔵 Scale-IN step → '+ttCalc+'  (safe floor: RCPT would be '+Math.round(total/ttCalc)+' ≤ '+c.target+'; next step after cooldown)';}
+      } else {lowState='breaching '+S.inBreach+'/'+IN_BREACH;lowCls='b-armin';log+='  · Low alarm breaching '+S.inBreach+'/'+IN_BREACH;}
+    } else {S.outBreach=0;S.inBreach=0;log+='  · within target band (hold)';}
+  }
+  ttWants=insufficient?S.desired:clamp(ttWants,c.min,c.max);
+
+  // ---- Predictive: hourly, held ----  and combine: desired = max(Predictive, TargetTracking) — the HIGHER wins
+  const predRaw=predictedActive(env,t);
+  const predContrib=(predMode==='scale')?predRaw:c.min;   // ForecastOnly contributes nothing above min
+  let desired=insufficient?S.desired:clamp(Math.max(ttWants,predContrib),c.min,c.max);
+  const capped=(!insufficient && Math.ceil(total/c.target)>c.max);
+  const aliveNow=inSvc(S.insts)+pend(S.insts);
+  // predictive is scale-out-only → it acts as a FLOOR that vetoes target-tracking scale-in below the plan
+  if(!insufficient && scaleInWanted && predContrib>ttWants && desired>=aliveNow){
+    S.note='scale-in held by predictive floor';
+    log+='  · ⛔ target-tracking wanted '+ttWants+' but predictive floor is '+predContrib+' → max wins, holding at '+desired;
+  }
+  // derive the actual action from the change in capacity
+  if(insufficient) action='hold';
+  else if(desired>aliveNow) action=(predMode==='scale'&&predContrib>ttWants)?'pre-warm':'scale-out';
+  else if(desired<aliveNow) action='scale-in';
+  else action='hold';
+  S.desired=desired;
+
+  // ---- reconcile fleet (ASG behaviour) ----
+  const alive=inSvc(S.insts)+pend(S.insts);
+  if(alive<desired)for(let k=0;k<desired-alive;k++)S.insts.push({state:'launching',age:0});
+  else if(alive>desired){let rm=alive-desired;S.insts.sort((a,b)=>b.age-a.age);
+    for(const it of S.insts){if(rm<=0)break;if(it.state==='inservice'){it.state='terminating';it.age=0;rm--;}}}
+  for(const it of S.insts){it.age++;
+    if(it.state==='launching'&&it.age>=LAUNCH_TO_INSVC)it.state='inservice';
+    if(it.state==='terminating'&&it.age>=DRAIN_MIN)it.state='dead';}
+  S.insts=S.insts.filter(i=>i.state!=='dead');
+
+  S.hist.push({t,metric:insufficient?null:metric,target:c.target,pred:predMode==='scale'?predRaw:null,desired,running:inSvc(S.insts),min:c.min,max:c.max});
+  if(S.hist.length>DAY+2)S.hist.shift();
+  S.log.unshift(log);if(S.log.length>11)S.log.pop();
+  S.t++;
+  render(total,metric,{highState,highCls,lowState,lowCls},action,aClass,ttWants,ttCalc,predRaw,predContrib,desired,capped,insufficient);
+  if(S.t>=DAY){ // loop the day for a booth demo
+    S.t=0;S.hist=[];S.outBreach=0;S.inBreach=0;S.log.unshift('──────── day rolled over (00:00 UTC) ────────');
+  }
+}
+
+function render(total,metric,al,action,aClass,ttWants,ttCalc,predRaw,predContrib,desired,capped,insufficient){
+  const c=ENVS[env],t=(S.t-1+DAY)%DAY;
+  document.getElementById('clock').textContent=hhmm(t)+' UTC';
+  // pipeline
+  document.getElementById('albReq').textContent=fmt(total);
+  document.getElementById('metV').textContent=insufficient?'—':(metric?metric.toFixed(0):0);
+  document.getElementById('metS').textContent='vs '+c.target;
+  // predictive card
+  const curH=Math.floor(t/60)%24, nextH=(curH+1)%24;
+  document.getElementById('pMode').innerHTML = predMode==='scale'?'<span class="badge b-ok">Forecast &amp; Scale</span>':'<span class="badge b-hold">Forecast Only (inert)</span>';
+  document.getElementById('pThis').textContent = predMode==='scale'?predRaw:'—';
+  document.getElementById('pNext').textContent = forecastForHour(env,nextH)+'  (for '+String(nextH).padStart(2,'0')+':00)';
+  let peak=0;for(let h=0;h<24;h++)peak=Math.max(peak,forecastForHour(env,h));
+  document.getElementById('pPeak').textContent = predMode==='scale'?(peak+'  (planned, whole day known)'):'—';
+  document.getElementById('pSetAt').textContent = String((curH+23)%24).padStart(2,'0')+':45  (900 s before '+String(curH).padStart(2,'0')+':00)';
+  // target tracking card
+  document.getElementById('tMetric').textContent=insufficient?'no data':(metric?metric.toFixed(0):0)+' req/inst/min';
+  document.getElementById('tTarget').textContent=c.target;
+  document.getElementById('aHigh').innerHTML='<span class="badge '+al.highCls+'">'+al.highState+'</span>';
+  document.getElementById('aLow').innerHTML='<span class="badge '+al.lowCls+'">'+al.lowState+'</span>';
+  document.getElementById('tWants').textContent=insufficient?'hold':ttCalc;
+  document.getElementById('tForm').textContent=insufficient?'insufficient data → no calculation':('ceil( '+(inSvc(S.insts)||1)+' InService × '+(metric?metric.toFixed(0):0)+' RCPT ÷ '+c.target+' ) = '+ttCalc);
+  // final card
+  document.getElementById('fMax').textContent='max( '+(predMode==='scale'?predRaw:'min '+c.min)+' , '+(insufficient?'hold':ttWants)+' ) = '+(insufficient?S.desired:Math.max(predContrib,ttWants));
+  document.getElementById('fClamp').textContent='[ '+c.min+' … '+c.max+' ] → '+desired;
+  const badge={'scale-out':'b-out','scale-in':'b-in','pre-warm':'b-warn','hold':'b-hold'}[action]||'b-hold';
+  document.getElementById('fAction').innerHTML='<span class="badge '+badge+'">'+action+'</span>'+(capped?' <span class="badge b-warn">CAPPED at max</span>':'')+(S.note?' <span class="badge b-warn">'+S.note+'</span>':'');
+  document.getElementById('fDesired').textContent=desired;
+  document.getElementById('fForm').textContent='clamp( max( PS '+(predMode==='scale'?predRaw:c.min)+' , TT '+(insufficient?'—':ttWants)+' ), '+c.min+', '+c.max+' ) = '+desired;
+  // fleet
+  document.getElementById('hMin').textContent=c.min;document.getElementById('hMax').textContent=c.max;document.getElementById('hDes').textContent=desired;
+  const f=document.getElementById('fleet');f.innerHTML='';
+  S.insts.forEach(it=>{const d=document.createElement('div');d.className='inst '+it.state;d.title=it.state+' (age '+it.age+'m)';f.appendChild(d);});
+  document.getElementById('cIn').textContent=cs(S.insts,'inservice');
+  document.getElementById('cLaunch').textContent=cs(S.insts,'launching');
+  document.getElementById('cTerm').textContent=cs(S.insts,'terminating');
+  document.getElementById('cDesired').textContent=desired;
+  document.getElementById('log').textContent=S.log.join('\n');
+  drawChart();
+}
+
+function drawChart(){
+  const cv=document.getElementById('chart'),x=cv.getContext('2d'),W=cv.width,H=cv.height,c=ENVS[env],pad=30,n=DAY;
+  x.clearRect(0,0,W,H);
+  const maxCap=c.max*1.15, maxMet=c.target*2.2;
+  const px=t=>pad+(W-2*pad)*t/n, pc=v=>H-pad-(H-2*pad)*v/maxCap, pm=v=>H-pad-(H-2*pad)*v/maxMet;
+  // hour gridlines
+  x.lineWidth=1;
+  for(let h=0;h<=24;h+=3){x.strokeStyle='#e6ecf5';x.beginPath();x.moveTo(px(h*60),pad);x.lineTo(px(h*60),H-pad);x.stroke();
+    x.fillStyle='#5b6b90';x.font='9px sans-serif';x.fillText(String(h).padStart(2,'0'),px(h*60)-6,H-pad+12);}
+  // axes
+  x.strokeStyle='#c2cde0';x.beginPath();x.moveTo(pad,H-pad);x.lineTo(W-pad,H-pad);x.moveTo(pad,pad);x.lineTo(pad,H-pad);x.stroke();
+  // min/max + target
+  x.strokeStyle='#C00000';x.setLineDash([4,4]);[c.min,c.max].forEach(v=>{x.beginPath();x.moveTo(pad,pc(v));x.lineTo(W-pad,pc(v));x.stroke();});
+  x.strokeStyle='#1b2540';x.beginPath();x.moveTo(pad,pm(c.target));x.lineTo(W-pad,pm(c.target));x.stroke();x.setLineDash([]);
+  // FULL-DAY predictive plan — known in advance, highlighted across the WHOLE axis (does not react to live load)
+  if(predMode==='scale'){
+    x.beginPath();x.moveTo(px(0),H-pad);
+    for(let m=0;m<=n;m++)x.lineTo(px(m),pc(predictedActive(env,m)));
+    x.lineTo(px(n),H-pad);x.closePath();x.fillStyle='rgba(237,125,49,0.13)';x.fill();
+    x.strokeStyle='#ED7D31';x.lineWidth=2.5;x.beginPath();
+    for(let m=0;m<=n;m++){const y=pc(predictedActive(env,m));if(m===0)x.moveTo(px(m),y);else x.lineTo(px(m),y);}
+    x.stroke();x.lineWidth=1;
+  }
+  const Hh=S.hist;if(!Hh.length){labels();return;}
+  const line=(key,color,map,dash)=>{x.strokeStyle=color;x.lineWidth=2;if(dash)x.setLineDash(dash);x.beginPath();let s=false;
+    Hh.forEach(p=>{const v=p[key];if(v==null){s=false;return;}const y=map(v);if(!s){x.moveTo(px(p.t),y);s=true;}else x.lineTo(px(p.t),y);});x.stroke();x.setLineDash([]);};
+  line('metric','#2E8B8B',pm);
+  line('desired','#e0932b',pc);
+  line('running','#548235',pc);
+  labels();
+  function labels(){x.fillStyle='#5b6b90';x.font='10px sans-serif';x.fillText('UTC hour',W-58,H-pad+22);
+    x.fillText('target',W-pad-40,pm(c.target)-3);x.fillText('max',W-pad-26,pc(c.max)-3);x.fillText('min',W-pad-24,pc(c.min)-3);}
+}
+
+/* controls */
+function selectEnv(e){env=e;document.querySelectorAll('.tab').forEach(t=>t.classList.toggle('active',t.dataset.env===e));resetSim();}
+function loadScenario(){scen=document.getElementById('scenario').value;resetSim();}
+function setPredMode(){predMode=document.getElementById('predmode').value;resetSim();}
+function setSpeed(){speed=+document.getElementById('speed').value;if(timer){pause();play();}}
+function skipHour(){pause();for(let i=0;i<60;i++)stepSim();}
+function tgInfo(){const c=ENVS[env];document.getElementById('tgN').textContent=c.tgCount;
+  document.getElementById('tgS').textContent=c.tgCount===1?'target group':'target groups (summed)';
+  document.getElementById('tgCap').textContent=c.tgCount===1?'Target Group':'Target Groups ×'+c.tgCount;
+  document.getElementById('metS').textContent='vs '+c.target;}
+function cfg(){const c=ENVS[env];document.getElementById('cfgBox').innerHTML=
+  '<b>'+c.name+'</b><br>Metric: '+c.metric+'<br>Target: <b>'+c.target+'</b> req/inst/min · Build: '+c.build+'<br>'+
+  'Live today: min <b>'+c.liveMin+'</b> · scale-in OFF · MaxInstanceLifetime UNSET · Predictive ForecastOnly (inert)<br>'+
+  'Recommended: min <b>'+c.min+'</b> / max <b>'+c.max+'</b> · Predictive ForecastAndScale (buffer 900 s) · scale-in ON (900 s cooldown, gradual) · recycle ~1 day<br>'+
+  'Launch→InService ~'+LAUNCH_TO_INSVC+' min · pre-launch buffer '+BUFFER_MIN+' min<br>'+
+  '<span style="color:'+(c.measured?'#2f7a1c':'#b25a12')+'">'+(c.measured?'✓ ALB curve = Evergent measured hourly demand (2026-08-26)':'⚠ ALB curve = representative shape (7-day aggregate: avg demand ~18, peak ~44; per-TG hourly not separately measured)')+'</span>';}
+function resetSim(){pause();S=freshState();
+  document.getElementById('asgLbl').textContent='ASG — '+ENVS[env].name;
+  document.getElementById('scenNote').textContent=scenarios(env)[scen].note;
+  tgInfo();cfg();
+  render(scenarios(env)[scen].tot(0),scenarios(env)[scen].tot(0)/ENVS[env].min,
+    {highState:'OK',highCls:'b-ok',lowState:'OK',lowCls:'b-ok'},'hold','b-hold',ENVS[env].min,ENVS[env].min,ENVS[env].min,ENVS[env].min,ENVS[env].min,false,false);}
+function play(){document.getElementById('playBtn').textContent='⏸ Pause';timer=setInterval(stepSim,speed);}
+function pause(){document.getElementById('playBtn').textContent='▶ Play day';if(timer){clearInterval(timer);timer=null;}}
+function togglePlay(){timer?pause():play();}
+function stepOnce(){pause();stepSim();}
+resetSim();
+</script>
+</body>
+</html>

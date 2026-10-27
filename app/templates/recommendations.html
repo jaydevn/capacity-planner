@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block title %}Recommendations{% endblock %}
+{% block content %}
+<section class="page-head">
+  <div>
+    <h1>Optimization opportunities</h1>
+    <div class="muted">Total estimated savings: <b>${{ '{:,.0f}'.format(total_savings) }}</b> / month</div>
+  </div>
+</section>
+
+<section class="panel">
+  <table class="grid">
+    <thead>
+      <tr><th>ASG</th><th>Category</th><th>Recommendation</th>
+          <th>Est. monthly savings</th><th>Confidence</th><th></th></tr>
+    </thead>
+    <tbody>
+      {% for r in recs %}
+      <tr>
+        <td><a href="{{ url_for('asg_detail', region=r.region, name=r.asg_name) }}">{{ r.asg_name }}</a><div class="muted small">{{ r.region }}</div></td>
+        <td><span class="badge cat-{{ r.category }}">{{ r.category.replace('_',' ') }}</span></td>
+        <td>
+          <b>{{ r.headline }}</b>
+          {% if r.detail %}<div class="muted small">{{ r.detail }}</div>{% endif %}
+        </td>
+        <td>${{ '{:,.0f}'.format(r.estimated_savings_usd or 0) }}</td>
+        <td><span class="badge conf-{{ r.confidence }}">{{ r.confidence }}</span></td>
+        <td><a href="{{ url_for('asg_detail', region=r.region, name=r.asg_name) }}">Detail →</a></td>
+      </tr>
+      {% else %}
+      <tr><td colspan="6" class="empty">No open recommendations. Nightly job regenerates from the last 30 days.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}

@@ -1,0 +1,14 @@
+[Unit]
+Description=Pull multi-region Auto Scaling metrics into SQLite
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=asginsights
+Group=asginsights
+WorkingDirectory=/opt/asg-insights
+EnvironmentFile=-/etc/asg-insights/asg-insights.env
+Environment=ASG_INSIGHTS_DB=/var/lib/asg-insights/asg_insights.db
+Environment=PATH=/opt/asg-insights/.venv/bin
+ExecStart=/opt/asg-insights/.venv/bin/python -m app.pull_metrics

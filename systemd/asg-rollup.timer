@@ -1,0 +1,10 @@
+[Unit]
+Description=Nightly asg-insights rollup (03:15 UTC)
+
+[Timer]
+OnCalendar=*-*-* 03:15:00 UTC
+Persistent=true
+Unit=asg-rollup.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,17 @@
+[Unit]
+Description=asg-insights Flask dashboard (gunicorn)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=asginsights
+Group=asginsights
+WorkingDirectory=/opt/asg-insights
+Environment=ASG_INSIGHTS_DB=/var/lib/asg-insights/asg_insights.db
+Environment=PATH=/opt/asg-insights/.venv/bin
+ExecStart=/opt/asg-insights/.venv/bin/gunicorn -w 2 -b 127.0.0.1:8000 app.main:app
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

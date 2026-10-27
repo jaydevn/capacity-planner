@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}ASG Insights{% endblock %} · Evergent</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+<script src="https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js"></script>
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <span class="logo">◆</span> ASG Insights
+    <span class="env-pill">prod · read-only</span>
+  </div>
+  <nav>
+    <a href="{{ url_for('dashboard') }}" class="{{ 'active' if request.endpoint == 'dashboard' }}">Fleet</a>
+    <a href="{{ url_for('recommendations') }}" class="{{ 'active' if request.endpoint == 'recommendations' }}">Recommendations</a>
+    <a href="{{ url_for('scenarios') }}" class="{{ 'active' if request.endpoint == 'scenarios' }}">Scenarios</a>
+  </nav>
+  <div class="clock">
+    <span id="now"></span> UTC
+  </div>
+</header>
+
+<div class="freshness-strip {{ 'stale' if freshness_stale }}">
+  <span class="fs-label">Data freshness (fleet):</span>
+  {% for f in freshness %}
+    <span class="fs-item {{ 'stale' if f.stale }}" title="{% if f.error_ts %}last error: {{ f.last_error_msg }}{% endif %}">
+      <span class="fs-dot"></span>
+      <b>{{ f.label }}</b> · {{ fmt_age(f.age_sec) }}
+    </span>
+  {% else %}
+    <span class="fs-item stale"><span class="fs-dot"></span>No ingestion recorded yet — is the puller running?</span>
+  {% endfor %}
+</div>
+
+<main>
+  {% block content %}{% endblock %}
+</main>
+<footer>
+  Data window: last 90 days at 5-min · older kept as hourly rollup ·
+  <span class="warn">Recommendations are heuristic — validate before action.</span>
+</footer>
+<script>
+  function fmtNow(){
+    const d=new Date();
+    document.getElementById('now').textContent =
+      d.getUTCFullYear()+'-'+String(d.getUTCMonth()+1).padStart(2,'0')+'-'+
+      String(d.getUTCDate()).padStart(2,'0')+' '+
+      String(d.getUTCHours()).padStart(2,'0')+':'+String(d.getUTCMinutes()).padStart(2,'0');
+  }
+  fmtNow(); setInterval(fmtNow, 30000);
+</script>
+</body>
+</html>

@@ -1,0 +1,129 @@
+{% extends "base.html" %}
+{% block title %}{{ cfg.asg_name }}{% endblock %}
+{% block content %}
+<section class="page-head">
+  <div>
+    <div class="crumb"><a href="{{ url_for('dashboard') }}">Fleet</a> ▸</div>
+    <h1>{{ cfg.asg_name }}</h1>
+    <div class="muted">
+      {{ cfg.instance_type or '—' }} · {{ cfg.region }} ·
+      min {{ cfg.min_size }} / max {{ cfg.max_size }} ·
+      TT target {{ cfg.tt_target or '—' }} req/inst/min
+    </div>
+  </div>
+  <div class="range-picker">
+    <button data-range="1d">1d</button>
+    <button data-range="7d" class="active">7d</button>
+    <button data-range="30d">30d</button>
+    <button data-range="90d">90d</button>
+  </div>
+</section>
+
+<section class="freshness-per-asg">
+  {% for f in per_asg_freshness %}
+    <div class="fp-item {{ 'stale' if f.stale }}">
+      <div class="fp-lbl">{{ f.label }}</div>
+      <div class="fp-age">{{ fmt_age(f.age_sec) }}</div>
+      {% if f.error_ts %}<div class="fp-err" title="{{ f.last_error_msg }}">⚠ last error {{ fmt_age((f.error_ts and (freshness[0].age_sec or 0)) or 0) }}</div>{% endif %}
+    </div>
+  {% else %}
+    <div class="fp-item stale"><div class="fp-lbl">No ingestion for this ASG yet</div></div>
+  {% endfor %}
+</section>
+
+<section class="panel">
+  <div id="chartEmpty" style="display:none;padding:14px 16px;margin:0 0 10px;
+       background:#fff7ea;border:1px solid #f0dcae;border-radius:8px;font-size:13px;color:#7a5200"></div>
+  <div id="detailChart" style="width:100%;height:380px"></div>
+</section>
+
+<section class="panel">
+  <div class="panel-head"><h2>Month over month</h2></div>
+  <table class="grid">
+    <thead>
+      <tr><th>Month</th><th>Avg InService</th><th>Peak</th><th>Utilization</th>
+          <th>SLA-risk min</th><th>Est. cost</th></tr>
+    </thead>
+    <tbody>
+      {% for m in monthly %}
+      <tr>
+        <td>{{ m.month }}</td>
+        <td>{{ '{:.1f}'.format(m.avg_in_service or 0) }}</td>
+        <td>{{ m.peak_in_service }}</td>
+        <td>{{ '{:.0%}'.format(m.p95_utilization or 0) }}</td>
+        <td>{{ m.sla_risk_minutes }}</td>
+        <td>${{ '{:,.0f}'.format(m.estimated_cost_usd or 0) }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+<script>
+const asg = {{ cfg.asg_name | tojson }};
+const timeseriesUrl = {{ url_for('api_timeseries', region=cfg.region, name=cfg.asg_name) | tojson }};
+const ttTarget = {{ cfg.tt_target or 'null' }};
+const chart = echarts.init(document.getElementById('detailChart'));
+let currentRange = '7d';
+
+function load(range){
+  fetch(`${timeseriesUrl}?range=${range}`).then(r=>r.json()).then(d=>{
+    const pts = d.points || [];
+    // Empty-state banner so a blank chart isn't confusing.
+    const banner = document.getElementById('chartEmpty');
+    if (pts.length === 0) {
+      banner.style.display = 'block';
+      banner.innerHTML = `<b>No data in the last ${range}.</b> ` +
+        `Table checked: <code>${d.table}</code>. ` +
+        `If seed data is stale, re-run <code>python -m app.seed_fake</code>. ` +
+        `If this is a real ASG, check the puller — see the Data freshness strip above.`;
+    } else {
+      banner.style.display = 'none';
+    }
+    const t   = pts.map(p => p.ts * 1000);
+    const iv  = pts.map(p => p.in_service);
+    const ds  = pts.map(p => p.desired);
+    const rc  = pts.map(p => p.alb_rcpt);
+    const ps  = pts.map(p => p.ps_predicted);
+    chart.setOption({
+      tooltip: { trigger: 'axis' },
+      legend: { data: ['InService', 'Desired', 'RCPT', 'Predicted', 'TT target'], top: 4, right: 12 },
+      grid: { left: 48, right: 60, top: 34, bottom: 44 },
+      dataZoom: [{ type: 'inside' }, { type: 'slider', height: 22, bottom: 12 }],
+      xAxis: { type: 'time' },
+      yAxis: [
+        { type: 'value', name: 'Instances' },
+        { type: 'value', name: 'RCPT', position: 'right' },
+      ],
+      series: [
+        { name: 'InService', type: 'line', showSymbol:false, smooth:true,
+          data: t.map((x,i)=>[x,iv[i]]), lineStyle:{width:2,color:'#548235'},
+          areaStyle:{color:'rgba(84,130,53,0.12)'} },
+        { name: 'Desired',   type: 'line', showSymbol:false, smooth:true,
+          data: t.map((x,i)=>[x,ds[i]]), lineStyle:{width:1.5,color:'#e0932b',type:'dashed'} },
+        { name: 'RCPT', yAxisIndex: 1, type: 'line', showSymbol:false, smooth:true,
+          data: t.map((x,i)=>[x,rc[i]]), lineStyle:{width:1.5,color:'#2E8B8B'} },
+        { name: 'Predicted', type: 'line', showSymbol:false, smooth:true,
+          data: t.map((x,i)=>[x,ps[i]]), lineStyle:{width:2,color:'#ED7D31'} },
+        ttTarget ? {
+          name: 'TT target', yAxisIndex: 1, type: 'line',
+          markLine: { symbol: 'none', silent: true,
+            data: [{ yAxis: ttTarget, lineStyle: { color: '#1b2540', type: 'solid', width: 1 } }] },
+          data: [],
+        } : null,
+      ].filter(Boolean),
+    });
+  });
+}
+document.querySelectorAll('.range-picker button').forEach(b => {
+  b.addEventListener('click', () => {
+    document.querySelectorAll('.range-picker button').forEach(x => x.classList.remove('active'));
+    b.classList.add('active');
+    currentRange = b.dataset.range;
+    load(currentRange);
+  });
+});
+load(currentRange);
+window.addEventListener('resize', () => chart.resize());
+</script>
+{% endblock %}
