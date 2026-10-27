@@ -49,6 +49,7 @@ Override defaults with env vars: `AWS_PROFILE_OVERRIDE`, `AWS_REGION`,
 `ALLOWED_CIDR` (defaults to the default-VPC block 172.31.0.0/16).
 
 After the stack is up, reach the dashboard via SSM port-forward:
+## This will change for production deployment and UI configuration setup.
 
 ```bash
 INST=$(aws --profile default cloudformation describe-stack-resources \
