@@ -154,13 +154,12 @@ Rough monthly cost (see [README](../README.md#cost-tuning-already-applied)):
 
 ## Step 7 — Get the source
 
-Clone or copy the `claude-output` directory to your workstation. It contains
-`scripts/deploy.sh`, the CloudFormation template, and the app source.
-
-Verify structure:
+Clone the repository to your workstation. It contains `scripts/deploy.sh`, the
+CloudFormation template, and the app source.
 
 ```bash
-cd path/to/claude-output
+git clone https://github.com/jaydevn/capacity-planner.git
+cd capacity-planner
 ls scripts/deploy.sh app/main.py infra/cloudformation.yaml
 ```
 
@@ -177,12 +176,18 @@ no file edits required.
 | `AWS_PROFILE_OVERRIDE` | `default` | Your named profile is different |
 | `INSTANCE_TYPE` | `t3.medium` | Want smaller/bigger box |
 | `PREFERRED_AZ` | `${REGION}a` | The `-a` AZ has no default subnet |
-| `ALLOWED_CIDR` | `172.31.0.0/16` | Non-default VPC or restricted access |
+| `ASG_SCAN_REGIONS` | `all` | Restrict scanning to a comma-separated region list |
+| `ALLOWED_CIDR` | `0.0.0.0/0` | **Restrict who can reach the public ALB** (set to your office/VPN CIDR) |
+| `PUBLIC_SUBNET_IDS` | auto-discovered | Pass explicit public subnets for the ALB (non-default VPC) |
 
-Example:
+> The ALB is internet-facing and the app has no authentication. Set
+> `ALLOWED_CIDR` to a trusted range before pointing it at real data.
+
+Example — restrict the ALB to your current IP and scan only two regions:
 
 ```bash
-INSTANCE_TYPE=t3.small PREFERRED_AZ=us-east-1b ./scripts/deploy.sh
+ALLOWED_CIDR="$(curl -s https://checkip.amazonaws.com)/32" \
+  ASG_SCAN_REGIONS=us-east-1,us-west-2 ./scripts/deploy.sh
 ```
 
 ## Step 9 — Deploy
@@ -195,10 +200,12 @@ The script:
 1. Verifies you're on the right account.
 2. Creates the S3 source bucket (encryption + public-access-block + versioning).
 3. Syncs source to S3.
-4. Discovers VPC + subnet.
+4. Discovers the VPC, the instance subnet, and **≥ 2 public subnets** (across
+   AZs) for the load balancer.
 5. Validates the CloudFormation template.
-6. Deploys the stack (~2 minutes).
-7. Prints the stack outputs.
+6. Deploys the stack — EC2, public ALB, target group, listener, IAM, SGs
+   (~3-4 minutes).
+7. Prints the stack outputs, including the public `DashboardUrl`.
 
 If deploy fails, it dumps the last 20 CloudFormation failure events
 automatically — send them to your dev contact and they can pinpoint the fix.
@@ -226,15 +233,26 @@ exit
 
 ## Step 11 — Open the dashboard
 
-Still on your workstation (leave this session running while you browse):
+The dashboard is served through the **public Application Load Balancer**. Get
+its URL from the stack outputs and open it in a browser:
 
 ```bash
-aws ssm start-session --target "$INST" \
-  --document-name AWS-StartPortForwardingSession \
-  --parameters '{"portNumber":["80"],"localPortNumber":["8080"]}'
+aws cloudformation describe-stacks --stack-name asg-insights \
+  --query "Stacks[0].Outputs[?OutputKey=='DashboardUrl'].OutputValue" \
+  --output text
+# open the printed http://<alb-dns-name>/ URL
 ```
 
-Open **http://127.0.0.1:8080/** in your browser.
+It can take ~1-2 minutes after deploy for the target to pass the ALB health
+check (`/healthz`). If the ALB returns 503 briefly, wait and retry.
+
+> Prefer to keep it internal? SSM port-forward to the instance still works:
+> ```bash
+> aws ssm start-session --target "$INST" \
+>   --document-name AWS-StartPortForwardingSession \
+>   --parameters '{"portNumber":["80"],"localPortNumber":["8080"]}'
+> # then open http://127.0.0.1:8080/
+> ```
 
 The freshness strip at the top says "No ingestion recorded yet" until the
 first hourly poll runs (up to ~1 hour after boot, unless you kick it manually
@@ -284,7 +302,8 @@ You're done. Give your customer:
 
 1. This document (or `README.md` for a shorter intro).
 2. [OPERATIONS.md](OPERATIONS.md) for ongoing maintenance.
-3. The SSM port-forward command they'll use to reach the dashboard.
+3. The **public ALB URL** (`DashboardUrl` stack output) they'll use to reach
+   the dashboard — and a reminder that `ALLOWED_CIDR` governs who can get to it.
 4. The stack name (`asg-insights`) and source bucket
    (`asg-insights-src-<account>`), so they can find things later.
 
@@ -302,8 +321,9 @@ After Step 9 succeeds, the following exist in your AWS account:
 |---|---|---|
 | CloudFormation stack `asg-insights` | Manages everything below except the bucket | `delete-stack` removes it |
 | EC2 instance (`t3.medium`) | Runs the Flask dashboard + puller | Stack-managed |
-| IAM role + instance profile | Read-only access to CW, ASG, ALB, SSM | Stack-managed |
-| Security group | :80 from `ALLOWED_CIDR` only | Stack-managed |
+| Public Application Load Balancer + target group + listener | Internet-facing entry point → EC2 :80 | Stack-managed |
+| IAM role + instance profile | Read-only access to CW, ASG, ELBv2, EC2, Pricing, SSM | Stack-managed |
+| Security groups (ALB + instance) | ALB: :80 from `ALLOWED_CIDR`; instance: :80 from ALB only | Stack-managed |
 | S3 bucket `asg-insights-src-<account>` | App source + backups | **Retained** — outlives stack teardown |
 
 ## Troubleshooting quick reference

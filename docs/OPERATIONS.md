@@ -82,7 +82,19 @@ aws ssm start-session --target "$INST"
 
 ## 3. Accessing the dashboard
 
-The SG only allows :80 from the default-VPC CIDR, so use SSM port-forward:
+The dashboard is served by an internet-facing ALB. Get its URL and browse to it:
+
+```bash
+aws cloudformation describe-stacks --stack-name asg-insights \
+  --query "Stacks[0].Outputs[?OutputKey=='DashboardUrl'].OutputValue" --output text
+# open the printed http://<alb-dns-name>/ URL
+```
+
+Who can reach it is governed by `ALLOWED_CIDR` on the ALB security group (set
+at deploy time). The app itself has no authentication — keep `ALLOWED_CIDR`
+tight and/or add OIDC/Cognito on the ALB listener before exposing real data.
+
+Prefer to keep access internal? SSM port-forward still works:
 
 ```bash
 INST=$(aws cloudformation describe-stack-resource \
