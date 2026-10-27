@@ -1,7 +1,9 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Description: >-
-  asg-insights — Flask + SQLite dashboard on a single EC2, discovering ASGs
-  in an explicit list of AWS regions and pulling metrics on a systemd timer.
+  asg-insights — Flask + SQLite dashboard on a single EC2 behind an
+  internet-facing Application Load Balancer. A systemd timer polls Auto
+  Scaling groups (by tag) across all enabled account regions for predictive
+  scaling forecasts and target-tracking data.
 
 Parameters:
   VpcId:
@@ -9,7 +11,16 @@ Parameters:
     Description: VPC where the dashboard EC2 instance runs.
   SubnetId:
     Type: AWS::EC2::Subnet::Id
-    Description: Private subnet in the VPC (dashboard is internal-only).
+    Description: >-
+      Subnet in the VPC where the dashboard EC2 instance runs. With a public
+      load balancer in front, this can be a private subnet; the instance takes
+      traffic only from the ALB security group.
+  PublicSubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: >-
+      Two or more PUBLIC subnets in different AZs for the internet-facing
+      Application Load Balancer. Must include the AZ of SubnetId so the ALB can
+      reach the instance target.
   SourceBucketName:
     Type: String
     Description: >-
@@ -18,8 +29,10 @@ Parameters:
     AllowedPattern: ^[a-z0-9][a-z0-9.\-]{1,61}[a-z0-9]$
   AllowedCidr:
     Type: String
-    Default: 10.0.0.0/8
-    Description: CIDR that can reach the dashboard on port 80 (VPN / VPC).
+    Default: 0.0.0.0/0
+    Description: >-
+      CIDR allowed to reach the public load balancer on port 80. Defaults to
+      the whole internet; restrict to an office/VPN range for a tighter posture.
     AllowedPattern: ^([0-9]{1,3}\.){3}[0-9]{1,3}/[0-9]{1,2}$
   InstanceType:
     Type: String
@@ -40,10 +53,12 @@ Parameters:
     Description: Tag value used to discover ASGs to track.
   ScanRegions:
     Type: String
-    Default: us-east-1
-    AllowedPattern: ^[a-z0-9-]+(,[a-z0-9-]+)*$
-    ConstraintDescription: Use comma-separated AWS region names without spaces.
-    Description: Comma-separated AWS regions whose Auto Scaling groups are scanned.
+    Default: all
+    AllowedPattern: ^(all|[a-z0-9-]+(,[a-z0-9-]+)*)$
+    ConstraintDescription: Use 'all' or comma-separated AWS region names without spaces.
+    Description: >-
+      'all' (default) scans every region enabled in the account; or a
+      comma-separated allowlist to restrict scanning to specific regions.
   DnsHostedZoneId:
     Type: String
     Default: ""
@@ -100,6 +115,7 @@ Resources:
                   - cloudwatch:ListMetrics
                   - ec2:DescribeInstances
                   - ec2:DescribeLaunchTemplateVersions
+                  - ec2:DescribeRegions
                 Resource: "*"
 
   InstanceProfile:
@@ -107,21 +123,42 @@ Resources:
     Properties:
       Roles: [!Ref InstanceRole]
 
-  DashboardSg:
+  AlbSg:
     Type: AWS::EC2::SecurityGroup
     Properties:
       VpcId: !Ref VpcId
-      GroupDescription: !Sub "asg-insights dashboard (${AWS::StackName})"
+      GroupDescription: !Sub "asg-insights public ALB (${AWS::StackName})"
       SecurityGroupIngress:
         - IpProtocol: tcp
           FromPort: 80
           ToPort: 80
           CidrIp: !Ref AllowedCidr
-          Description: Dashboard HTTP from internal network
+          Description: Public HTTP to the load balancer
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+          Description: All egress (forward to instance targets)
+
+  DashboardSg:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      VpcId: !Ref VpcId
+      GroupDescription: !Sub "asg-insights dashboard (${AWS::StackName})"
       SecurityGroupEgress:
         - IpProtocol: -1
           CidrIp: 0.0.0.0/0
           Description: All egress (AWS APIs + apt)
+
+  # Separate ingress rule so the instance SG accepts :80 only from the ALB SG.
+  DashboardSgFromAlb:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref DashboardSg
+      IpProtocol: tcp
+      FromPort: 80
+      ToPort: 80
+      SourceSecurityGroupId: !Ref AlbSg
+      Description: Dashboard HTTP from the public ALB only
 
   Dashboard:
     Type: AWS::EC2::Instance
@@ -162,6 +199,49 @@ Resources:
             ASG_DISCOVERY_TAG_VAL="${DiscoveryTagVal}" \
             /tmp/bootstrap.sh 2>&1 | tee /var/log/asg-insights-bootstrap.log
 
+  PublicAlb:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !Sub "${AWS::StackName}-alb"
+      Type: application
+      Scheme: internet-facing
+      IpAddressType: ipv4
+      Subnets: !Ref PublicSubnetIds
+      SecurityGroups: [!Ref AlbSg]
+      Tags:
+        - Key: App
+          Value: asg-insights
+
+  DashboardTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub "${AWS::StackName}-tg"
+      VpcId: !Ref VpcId
+      Protocol: HTTP
+      Port: 80
+      TargetType: instance
+      HealthCheckProtocol: HTTP
+      HealthCheckPath: /healthz
+      HealthCheckIntervalSeconds: 30
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 3
+      Matcher:
+        HttpCode: "200"
+      Targets:
+        - Id: !Ref Dashboard
+          Port: 80
+
+  AlbListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref PublicAlb
+      Protocol: HTTP
+      Port: 80
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref DashboardTargetGroup
+
   DnsRecord:
     Type: AWS::Route53::RecordSet
     Condition: CreateDnsRecord
@@ -169,8 +249,9 @@ Resources:
       HostedZoneId: !Ref DnsHostedZoneId
       Name: !Ref DnsRecordName
       Type: A
-      TTL: "300"
-      ResourceRecords: [!GetAtt Dashboard.PrivateIp]
+      AliasTarget:
+        DNSName: !GetAtt PublicAlb.DNSName
+        HostedZoneId: !GetAtt PublicAlb.CanonicalHostedZoneID
 
 Outputs:
   SourceBucketOut:
@@ -185,9 +266,12 @@ Outputs:
   DashboardPrivateIp:
     Description: Private IP of the dashboard instance.
     Value: !GetAtt Dashboard.PrivateIp
+  LoadBalancerDns:
+    Description: Public DNS name of the internet-facing load balancer.
+    Value: !GetAtt PublicAlb.DNSName
   DashboardUrl:
-    Description: Dashboard URL (via DNS if configured, else private IP).
+    Description: Public dashboard URL (custom DNS if configured, else ALB DNS).
     Value: !If
       - CreateDnsRecord
       - !Sub "http://${DnsRecordName}/"
-      - !Sub "http://${Dashboard.PrivateIp}/"
+      - !Sub "http://${PublicAlb.DNSName}/"

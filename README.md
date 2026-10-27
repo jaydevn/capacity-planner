@@ -9,12 +9,25 @@ dashboard.
 never CloudWatch directly, so page loads are free and stay working during a
 CloudWatch outage.
 
+## Architecture at a glance
+
+- **Flask app on one EC2 instance** (gunicorn behind nginx) in a chosen region.
+- **SQLite** on the instance's EBS volume — the only datastore.
+- **Poller** (`app/pull_metrics.py`) runs on a systemd timer and is the only
+  AWS-facing code. It discovers ASGs **by tag key/value** and, by default,
+  scans **every region enabled in the account** (`ASG_SCAN_REGIONS=all`),
+  collecting target-tracking configuration and predictive-scaling forecasts.
+- **Public Application Load Balancer** (internet-facing) forwards port 80 to
+  the EC2 instance; the instance security group accepts traffic only from the
+  ALB. Browse the dashboard at the ALB DNS name printed by `deploy.sh`.
+  Restrict `ALLOWED_CIDR` (and add auth) before exposing real data.
+
 ## Cost tuning (already applied)
 
 | Knob | Value | Why |
 |---|---|---|
-| EC2 instance | `t3.micro` | ~$7.50/mo, plenty for gunicorn + SQLite |
-| EBS volume | 12 GiB gp3 | ~$1.00/mo; SQLite fits years of hourly data |
+| EC2 instance | `t3.medium` | ~$30/mo; default, fits SQLite page cache for 50–150 ASGs |
+| EBS volume | 20 GiB gp3 | ~$1.60/mo; SQLite fits years of hourly data |
 | Puller cadence | every 1 hour | Aligns with PS 6-h refresh; 4× cheaper than 15-min polling |
 | Metric period | `Period=300` (5-min) | 12 datapoints/hour preserved; server-side aggregation is free |
 | PS forecast | 48-h window per poll | Regenerated every 6 h by AWS; hourly poll is a safety margin |
@@ -41,25 +54,30 @@ validate, `cloudformation deploy`, print outputs. Account, region, and bucket
 name are discovered from your AWS profile — nothing is hardcoded:
 
 ```bash
-cd claude-output
 ./scripts/deploy.sh
 ```
 
 Override defaults with env vars: `AWS_PROFILE_OVERRIDE`, `AWS_REGION`,
-`ALLOWED_CIDR` (defaults to the default-VPC block 172.31.0.0/16).
+`ASG_SCAN_REGIONS` (`all` by default — every enabled region — or a
+comma-separated allowlist), `ALLOWED_CIDR` (defaults to `0.0.0.0/0`;
+restrict this to your office/VPN range), and `PUBLIC_SUBNET_IDS`
+(auto-discovered from the default VPC otherwise).
 
-After the stack is up, reach the dashboard via SSM port-forward:
-## This will change for production deployment and UI configuration setup.
+After the stack is up, open the dashboard at the **public ALB DNS name** —
+it's printed in the stack outputs as `DashboardUrl` / `LoadBalancerDns`:
 
 ```bash
-INST=$(aws --profile default cloudformation describe-stack-resources \
-  --stack-name asg-insights --logical-resource-id Dashboard \
-  --query 'StackResources[0].PhysicalResourceId' --output text)
-aws --profile default ssm start-session --target "$INST" \
-  --document-name AWS-StartPortForwardingSession \
-  --parameters portNumber=80,localPortNumber=8080
-# open http://127.0.0.1:8080
+aws --profile default cloudformation describe-stacks \
+  --stack-name asg-insights \
+  --query "Stacks[0].Outputs[?OutputKey=='DashboardUrl'].OutputValue" \
+  --output text
+# open the printed http://<alb-dns-name>/ URL in a browser
 ```
+
+> The ALB is internet-facing and the app has no built-in authentication.
+> Set `ALLOWED_CIDR` to a trusted range, and/or put OIDC/Cognito auth on the
+> ALB listener, before pointing it at real data. SSM port-forward to the
+> instance's private IP still works too, if you prefer keeping it internal.
 
 ## Layout
 
@@ -77,13 +95,13 @@ app/
   static/style.css
 systemd/
   asg-insights.service     gunicorn on 127.0.0.1:8000 behind nginx :80
-  asg-puller.timer         15-min metric ingestion
+  asg-puller.timer         hourly metric ingestion (all regions, by tag)
   asg-rollup.timer         nightly retention + monthly rollup at 03:15 UTC
 scripts/
   user_data.sh             EC2 bootstrap
   deploy.sh                one-shot deploy from your workstation
 infra/
-  cloudformation.yaml      EC2 + IAM + SG + S3 + optional Route53 record
+  cloudformation.yaml      EC2 + public ALB + IAM + SGs + optional Route53 alias
 ```
 
 ## Data freshness (reliability)
@@ -125,9 +143,11 @@ Address each when the corresponding data starts to matter to your customer.
 3. **On-demand hourly rates** — hardcoded in `HOURLY_RATE_USD` (top of
    `pull_metrics.py`). Add rows for any instance families you run.
    Swap for the Pricing API when ±10 % cost accuracy isn't enough.
-4. **No auth on Flask** — relies on being in a private subnet reached only
-   by SSM port-forward or via the private-zone DNS. Add oauth2-proxy or
-   put an internal ALB with OIDC in front for SSO.
+4. **No auth on Flask** — the dashboard is now fronted by an **internet-facing**
+   ALB, so there is no network isolation by default. Before exposing real data,
+   either tighten `ALLOWED_CIDR` to a trusted range, or add OIDC/Cognito
+   authentication on the ALB listener (`authenticate-oidc` /
+   `authenticate-cognito` actions), or front it with oauth2-proxy.
 5. **Discovery is tag-based only** — if a prod ASG has no discovery tag,
    the dashboard won't see it. Either tag all prod ASGs
    (see [PREREQUISITES.md §5](docs/PREREQUISITES.md)) or override the

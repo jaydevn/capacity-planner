@@ -16,11 +16,12 @@ set -euo pipefail
 PROFILE="${AWS_PROFILE_OVERRIDE:-default}"
 REGION="${AWS_REGION:-us-east-1}"
 STACK="${STACK_NAME:-asg-insights}"
-SCAN_REGIONS="${ASG_SCAN_REGIONS:-$REGION}"
+# 'all' (default) scans every enabled region; override with a comma-separated list.
+SCAN_REGIONS="${ASG_SCAN_REGIONS:-all}"
 SCAN_REGIONS="${SCAN_REGIONS//[[:space:]]/}"
 
-if [[ ! "$SCAN_REGIONS" =~ ^[a-z0-9-]+(,[a-z0-9-]+)*$ ]]; then
-  echo "ERROR: ASG_SCAN_REGIONS must be a comma-separated region list; got: $SCAN_REGIONS" >&2
+if [[ ! "$SCAN_REGIONS" =~ ^(all|[a-z0-9-]+(,[a-z0-9-]+)*)$ ]]; then
+  echo "ERROR: ASG_SCAN_REGIONS must be 'all' or a comma-separated region list; got: $SCAN_REGIONS" >&2
   exit 2
 fi
 
@@ -55,9 +56,15 @@ aws --profile "$PROFILE" --region "$REGION" s3 sync . "s3://$BUCKET/" \
   --exclude ".git/*" --exclude ".DS_Store" --exclude ".claude/*" \
   --delete
 
-echo "== Discovering default VPC + subnet =="
+echo "== Discovering default VPC + subnets =="
 VPC_ID=$(aws --profile "$PROFILE" --region "$REGION" ec2 describe-vpcs \
   --filters Name=isDefault,Values=true --query 'Vpcs[0].VpcId' --output text)
+
+if [[ "$VPC_ID" == "None" || -z "$VPC_ID" ]]; then
+  echo "ERROR: no default VPC in $REGION. Create one or pass --parameter-overrides VpcId=... SubnetId=... PublicSubnetIds=..." >&2
+  exit 1
+fi
+
 # Prefer us-east-1a; some AZs (e.g. us-east-1e) don't offer the newer instance
 # families, so picking a well-supported AZ avoids capacity-error retries.
 PREFERRED_AZ="${PREFERRED_AZ:-${REGION}a}"
@@ -69,15 +76,28 @@ if [[ "$SUBNET_ID" == "None" || -z "$SUBNET_ID" ]]; then
   SUBNET_ID=$(aws --profile "$PROFILE" --region "$REGION" ec2 describe-subnets \
     --filters "Name=vpc-id,Values=$VPC_ID" --query 'Subnets[0].SubnetId' --output text)
 fi
-echo "  VPC=$VPC_ID  Subnet=$SUBNET_ID  AZ=$PREFERRED_AZ"
 
-if [[ "$VPC_ID" == "None" || -z "$VPC_ID" ]]; then
-  echo "ERROR: no default VPC in $REGION. Create one or pass --parameter-overrides VpcId=... SubnetId=..." >&2
+# A public ALB needs >=2 subnets in distinct AZs. Default-VPC subnets are all
+# public (route to the IGW). Pick one subnet per AZ and comma-join them.
+PUBLIC_SUBNETS="${PUBLIC_SUBNET_IDS:-}"
+if [[ -z "$PUBLIC_SUBNETS" ]]; then
+  PUBLIC_SUBNETS=$(aws --profile "$PROFILE" --region "$REGION" ec2 describe-subnets \
+    --filters "Name=vpc-id,Values=$VPC_ID" \
+    --query 'Subnets[].[AvailabilityZone,SubnetId]' --output text \
+    | sort -k1,1 -u | awk '{print $2}' | paste -sd, -)
+fi
+PUBLIC_SUBNET_COUNT=$(awk -F, '{print NF}' <<<"$PUBLIC_SUBNETS")
+if [[ "$PUBLIC_SUBNET_COUNT" -lt 2 ]]; then
+  echo "ERROR: need >=2 subnets in distinct AZs for the public ALB; found: $PUBLIC_SUBNETS" >&2
+  echo "       Pass PUBLIC_SUBNET_IDS='subnet-a,subnet-b' explicitly." >&2
   exit 1
 fi
+echo "  VPC=$VPC_ID  InstanceSubnet=$SUBNET_ID  AZ=$PREFERRED_AZ"
+echo "  PublicSubnets(ALB)=$PUBLIC_SUBNETS"
 
-# Allow the internal 172.31/16 that default VPCs use, unless caller overrides.
-ALLOWED_CIDR="${ALLOWED_CIDR:-172.31.0.0/16}"
+# The public ALB is reachable from the internet by default. Restrict who can
+# hit it by overriding ALLOWED_CIDR (e.g. your office/VPN egress range).
+ALLOWED_CIDR="${ALLOWED_CIDR:-0.0.0.0/0}"
 
 echo "== Validating template =="
 aws --profile "$PROFILE" --region "$REGION" cloudformation validate-template \
@@ -92,6 +112,7 @@ aws --profile "$PROFILE" --region "$REGION" cloudformation deploy \
   --parameter-overrides \
       "VpcId=$VPC_ID" \
       "SubnetId=$SUBNET_ID" \
+      "PublicSubnetIds=$PUBLIC_SUBNETS" \
       "AllowedCidr=$ALLOWED_CIDR" \
       "InstanceType=${INSTANCE_TYPE:-t3.medium}" \
       "SourceBucketName=$BUCKET" \
@@ -113,9 +134,11 @@ aws --profile "$PROFILE" --region "$REGION" cloudformation describe-stacks \
   --stack-name "$STACK" --query 'Stacks[0].Outputs' --output table
 
 echo
-echo "The instance is in a private subnet with no public IP. To reach the"
-echo "dashboard: SSM session-manager port-forward or attach an internet gateway."
-echo "  aws --profile $PROFILE --region $REGION ssm start-session \\"
-echo "    --target <INSTANCE_ID> --document-name AWS-StartPortForwardingSession \\"
-echo "    --parameters portNumber=80,localPortNumber=8080"
-echo "then open http://127.0.0.1:8080/"
+echo "The dashboard is served through a public Application Load Balancer."
+echo "Open the DashboardUrl / LoadBalancerDns value from the Outputs above in a"
+echo "browser. It may take ~1-2 minutes after deploy for the target to pass the"
+echo "/healthz health check and show as healthy."
+echo
+echo "Security note: ALLOWED_CIDR controls who can reach the ALB (currently"
+echo "'$ALLOWED_CIDR'). The app has no authentication, so restrict this to a"
+echo "trusted range, or put OIDC/Cognito on the ALB, before exposing real data."

@@ -34,10 +34,30 @@ HOURLY_RATE_USD = {
 }
 
 
+def _all_account_regions() -> list[str]:
+    """Enumerate every region enabled for this account via EC2 DescribeRegions."""
+    anchor = os.environ.get("AWS_REGION") or boto3.Session().region_name or "us-east-1"
+    client = boto3.Session(region_name=anchor).client("ec2")
+    response = client.describe_regions(AllRegions=False)
+    regions = sorted(item["RegionName"] for item in response.get("Regions", []))
+    if not regions:
+        raise ValueError("DescribeRegions returned no enabled regions for this account")
+    return regions
+
+
 def configured_regions() -> list[str]:
-    """Return the de-duplicated region allowlist in configured order."""
-    default_region = os.environ.get("AWS_REGION") or boto3.Session().region_name or "us-east-1"
-    raw = os.environ.get("ASG_SCAN_REGIONS", default_region)
+    """Return the regions to scan.
+
+    Default behavior is to scan *every* region enabled in the account, which
+    satisfies the "all ASGs across all regions" requirement. Set
+    ``ASG_SCAN_REGIONS`` to a comma-separated allowlist to restrict scanning
+    to specific regions; the sentinel value ``all`` (the default) means
+    "discover every enabled region at runtime".
+    """
+    raw = (os.environ.get("ASG_SCAN_REGIONS") or "all").strip()
+    if raw.lower() == "all":
+        return _all_account_regions()
+
     regions: list[str] = []
     seen: set[str] = set()
     for item in raw.split(","):
@@ -46,7 +66,7 @@ def configured_regions() -> list[str]:
             regions.append(region)
             seen.add(region)
     if not regions:
-        raise ValueError("ASG_SCAN_REGIONS must contain at least one AWS region")
+        raise ValueError("ASG_SCAN_REGIONS must be 'all' or a comma-separated region list")
     return regions
 
 
@@ -80,9 +100,13 @@ def discover_asgs(session: boto3.Session) -> list[dict]:
                 "instance_type": instance_type,
                 "min_size": group["MinSize"],
                 "max_size": group["MaxSize"],
+                # Defaults; overwritten by load_scaling_policies() in scan_region().
+                # Use None so a policy-load failure is distinguishable from a
+                # genuine "no predictive scaling" state rather than silently
+                # recording ps_enabled=0.
                 "tt_target": None,
-                "ps_enabled": 0,
-                "scale_in_enabled": 1,
+                "ps_enabled": None,
+                "scale_in_enabled": None,
                 "tg_arns": json.dumps(group.get("TargetGroupARNs", [])),
                 "tags": json.dumps(tags),
                 "hourly_rate_usd": HOURLY_RATE_USD.get(instance_type or "", 0.0),
@@ -107,6 +131,28 @@ def load_scaling_policies(session: boto3.Session, asg_name: str) -> dict:
         "tt_target": tt_target,
         "ps_enabled": int(ps_enabled),
         "scale_in_enabled": int(scale_in_enabled),
+    }
+
+
+def _prior_policy_state(region: str, asg_name: str) -> dict:
+    """Return the last stored policy state for an ASG, or safe defaults.
+
+    Used when a live DescribePolicies call fails so we preserve a known PS/TT
+    configuration instead of overwriting it with nulls.
+    """
+    row = db.query_one(
+        "SELECT tt_target, ps_enabled, scale_in_enabled FROM asg_config "
+        "WHERE region=? AND asg_name=?",
+        (region, asg_name),
+    )
+    if row is None:
+        return {"tt_target": None, "ps_enabled": 0, "scale_in_enabled": 1}
+    return {
+        "tt_target": row["tt_target"],
+        "ps_enabled": row["ps_enabled"] if row["ps_enabled"] is not None else 0,
+        "scale_in_enabled": (
+            row["scale_in_enabled"] if row["scale_in_enabled"] is not None else 1
+        ),
     }
 
 
@@ -369,6 +415,11 @@ def scan_region(region: str, start: datetime, end: datetime) -> int:
             mark_freshness(region, name, "tt_policy", ok=True, data_ts=int(time.time()))
             mark_freshness(region, name, "ps_policy", ok=True, data_ts=int(time.time()))
         except Exception as error:
+            # Don't clobber known-good policy state with nulls on a transient
+            # DescribePolicies failure. Fall back to whatever we last stored so
+            # an ASG that genuinely has PS+TT isn't mislabeled as having neither.
+            prior = _prior_policy_state(region, name)
+            cfg.update(prior)
             mark_freshness(region, name, "tt_policy", ok=False, err=str(error))
             mark_freshness(region, name, "ps_policy", ok=False, err=str(error))
             log.exception("[%s] failed to load policies for %s", region, name)

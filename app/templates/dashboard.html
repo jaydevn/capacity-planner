@@ -73,6 +73,7 @@
         </td>
         <td class="badges">
           {% if r.ps_enabled %}<span class="badge ok">PS</span>{% else %}<span class="badge off">PS off</span>{% endif %}
+          {% if r.tt_target is not none %}<span class="badge ok" title="Target tracking @ {{ r.tt_target }} req/inst/min">TT</span>{% else %}<span class="badge off">TT off</span>{% endif %}
           {% if r.scale_in_enabled %}<span class="badge ok">scale-in</span>{% else %}<span class="badge warn">scale-in off</span>{% endif %}
         </td>
       </tr>
