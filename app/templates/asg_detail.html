@@ -31,6 +31,85 @@
   {% endfor %}
 </section>
 
+<section class="cards">
+  <div class="card">
+    <div class="card-h">Scaling policies</div>
+    <div class="card-row">
+      <span>Predictive Scaling</span>
+      {% if cfg.ps_enabled %}<span class="badge ok">enabled</span>{% else %}<span class="badge off">off</span>{% endif %}
+    </div>
+    <div class="card-row">
+      <span>Target Tracking</span>
+      {% if cfg.tt_target is not none %}<span class="badge ok">enabled</span>{% else %}<span class="badge off">off</span>{% endif %}
+    </div>
+    <div class="card-row">
+      <span>TT target</span>
+      <b>{{ cfg.tt_target if cfg.tt_target is not none else '—' }}{% if cfg.tt_target is not none %} req/inst/min{% endif %}</b>
+    </div>
+    <div class="card-row">
+      <span>Scale-in</span>
+      {% if cfg.scale_in_enabled %}<span class="badge ok">enabled</span>{% else %}<span class="badge warn">disabled</span>{% endif %}
+    </div>
+    <div class="card-row"><span>Capacity bounds</span><b>min {{ cfg.min_size }} / max {{ cfg.max_size }}</b></div>
+  </div>
+
+  <div class="card">
+    <div class="card-h">Utilization (last 30 days)</div>
+    <div class="card-row"><span>Avg utilization vs target</span>
+      <b>{% if util.avg_util is not none %}{{ '{:.0%}'.format(util.avg_util) }}{% else %}—{% endif %}</b></div>
+    <div class="card-row"><span>Peak utilization vs target</span>
+      <b>{% if util.peak_util is not none %}{{ '{:.0%}'.format(util.peak_util) }}{% else %}—{% endif %}</b></div>
+    <div class="card-row"><span>Avg req/inst/min</span>
+      <b>{% if util.avg_rcpt is not none %}{{ '{:,.0f}'.format(util.avg_rcpt) }}{% else %}—{% endif %}</b></div>
+    <div class="card-row"><span>Avg / peak instances</span>
+      <b>{% if util.avg_inst is not none %}{{ '{:.1f}'.format(util.avg_inst) }} / {{ util.peak_inst }}{% else %}—{% endif %}</b></div>
+  </div>
+</section>
+
+<section class="panel">
+  <div class="panel-head"><h2>Target groups</h2>
+    <span class="muted">{{ target_groups | length }} attached</span></div>
+  <table class="grid">
+    <thead><tr><th>Name</th><th>Protocol</th><th>Port</th><th>Type</th><th>Load balancers</th></tr></thead>
+    <tbody>
+      {% for t in target_groups %}
+      <tr>
+        <td><b>{{ t.tg_name or '—' }}</b></td>
+        <td>{{ t.protocol or '—' }}</td>
+        <td>{{ t.port if t.port is not none else '—' }}</td>
+        <td>{{ t.target_type or '—' }}</td>
+        <td class="muted small">
+          {% set lbs = t.lb_arns | from_json %}
+          {% if lbs %}{{ lbs | length }} attached{% else %}none{% endif %}
+        </td>
+      </tr>
+      {% else %}
+      <tr><td colspan="5" class="empty">No target groups recorded for this ASG.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+<section class="panel">
+  <div class="panel-head"><h2>Recommendations</h2>
+    <span class="muted">Est. savings if applied: <b>${{ '{:,.0f}'.format(rec_savings_total) }}</b>/mo · prices from AWS Pricing API</span></div>
+  <table class="grid">
+    <thead><tr><th>Category</th><th>Recommendation</th><th>Est. monthly savings</th><th>Confidence</th></tr></thead>
+    <tbody>
+      {% for r in recs %}
+      <tr>
+        <td><span class="badge cat-{{ r.category }}">{{ r.category.replace('_',' ') }}</span></td>
+        <td><b>{{ r.headline }}</b>{% if r.detail %}<div class="muted small">{{ r.detail }}</div>{% endif %}</td>
+        <td>${{ '{:,.0f}'.format(r.estimated_savings_usd or 0) }}</td>
+        <td><span class="badge conf-{{ r.confidence }}">{{ r.confidence }}</span></td>
+      </tr>
+      {% else %}
+      <tr><td colspan="4" class="empty">No open recommendations — this ASG looks well-sized.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+
 <section class="panel">
   <div id="chartEmpty" style="display:none;padding:14px 16px;margin:0 0 10px;
        background:#fff7ea;border:1px solid #f0dcae;border-radius:8px;font-size:13px;color:#7a5200"></div>

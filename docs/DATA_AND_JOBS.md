@@ -92,7 +92,7 @@ Refreshed nightly. Rules live in [`regenerate_recommendations()`](../app/rollup.
 |---|---|---|
 | `id` | INTEGER PK | autoincrement |
 | `asg_name` | TEXT | FK to `asg_config` |
-| `category` | TEXT | `lower_min` \| `lower_max` \| `enable_ps` \| `enable_scale_in` \| `align_ps_tt` |
+| `category` | TEXT | `reduce_util_gap` \| `lower_min` \| `lower_max` \| `enable_ps` \| `enable_scale_in` |
 | `headline` | TEXT | short imperative title |
 | `detail` | TEXT | one-sentence rationale |
 | `estimated_savings_usd` | REAL | per month |
@@ -111,6 +111,31 @@ Purpose: powers the "Data freshness" strip on every page.
 | `last_success_data_ts` | INTEGER | newest datapoint we stored (epoch s) |
 | `last_error_ts` | INTEGER | epoch s of most recent failure |
 | `last_error_msg` | TEXT | truncated error text |
+
+#### `asg_target_groups` — target groups attached to each ASG
+Resolved from `elbv2:DescribeTargetGroups` on every puller run and shown on the
+ASG detail page.
+
+| Column | Type | Meaning |
+|---|---|---|
+| `region`, `asg_name` | TEXT PK | owning ASG |
+| `tg_arn` | TEXT PK | target-group ARN |
+| `tg_name` | TEXT | target-group name |
+| `protocol`, `port` | TEXT / INTEGER | listener protocol + port |
+| `target_type` | TEXT | `instance` \| `ip` \| `lambda` |
+| `lb_arns` | TEXT | JSON list of attached load-balancer ARNs |
+| `updated_at` | INTEGER | epoch seconds |
+
+#### `pricing_cache` — on-demand hourly rates from the AWS Pricing API
+Written by the poller (`pricing:GetProducts`) so the read-only UI and the
+recommendation engine use live list prices without calling AWS at render time.
+
+| Column | Type | Meaning |
+|---|---|---|
+| `region`, `instance_type` | TEXT PK | the rate's scope |
+| `hourly_rate_usd` | REAL | Linux shared-tenancy on-demand $/hour |
+| `source` | TEXT | `pricing_api` \| `fallback` (static table) |
+| `updated_at` | INTEGER | epoch seconds |
 
 ### Useful ad-hoc queries
 
@@ -230,6 +255,11 @@ Runs nightly. Four things, in order:
    and previous month. Idempotent — safe to re-run.
 4. **`regenerate_recommendations()`** — wipe `asg_recommendations` and
    regenerate open items from the last 30 days. Rules today:
+   - **`reduce_util_gap`** — the headline cost recommendation. For a
+     target-tracking ASG whose utilization (avg req-per-target ÷ TT target)
+     runs below an 85 % ideal, estimate the "ideal" instance count
+     (`current × util ÷ 0.85`), the instances that can be shed, and the
+     monthly dollar saving at the **AWS Pricing API** on-demand rate.
    - **`lower_min`** — p95 utilization < 40 % and min_size > 2 → suggest
      dropping the floor and estimate the savings.
    - **`enable_ps`** — no Predictive Scaling policy attached.

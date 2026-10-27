@@ -99,6 +99,31 @@ CREATE TABLE IF NOT EXISTS asg_recommendations (
 CREATE INDEX IF NOT EXISTS ix_recs_asg
   ON asg_recommendations (region, asg_name, status);
 
+-- Target groups attached to each ASG, resolved from elbv2 DescribeTargetGroups.
+CREATE TABLE IF NOT EXISTS asg_target_groups (
+  region            TEXT NOT NULL,
+  asg_name          TEXT NOT NULL,
+  tg_arn            TEXT NOT NULL,
+  tg_name           TEXT,
+  protocol          TEXT,
+  port              INTEGER,
+  target_type       TEXT,
+  lb_arns           TEXT,              -- JSON list of attached load balancer ARNs
+  updated_at        INTEGER NOT NULL,
+  PRIMARY KEY (region, asg_name, tg_arn)
+) WITHOUT ROWID;
+
+-- On-demand hourly price per (region, instance_type), cached from the AWS
+-- Pricing API by the poller so the read-only UI never calls AWS directly.
+CREATE TABLE IF NOT EXISTS pricing_cache (
+  region            TEXT NOT NULL,
+  instance_type     TEXT NOT NULL,
+  hourly_rate_usd   REAL NOT NULL,
+  source            TEXT,              -- 'pricing_api' | 'fallback'
+  updated_at        INTEGER NOT NULL,
+  PRIMARY KEY (region, instance_type)
+) WITHOUT ROWID;
+
 CREATE TABLE IF NOT EXISTS ingestion_status (
   region                TEXT NOT NULL,
   asg_name              TEXT NOT NULL,

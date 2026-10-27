@@ -7,7 +7,9 @@ DATA_DIR=/var/lib/asg-insights
 CONFIG_DIR=/etc/asg-insights
 SRC_S3="${SRC_S3:?SRC_S3 must be set by CloudFormation (s3://bucket/prefix)}"
 AWS_REGION="${AWS_REGION:-us-east-1}"
-ASG_SCAN_REGIONS="${ASG_SCAN_REGIONS:-$AWS_REGION}"
+# 'all' scans every enabled region in the account (requirement: all ASGs,
+# all regions). Override by passing an explicit comma-separated list.
+ASG_SCAN_REGIONS="${ASG_SCAN_REGIONS:-all}"
 ASG_DISCOVERY_TAG_KEY="${ASG_DISCOVERY_TAG_KEY:-Environment}"
 ASG_DISCOVERY_TAG_VAL="${ASG_DISCOVERY_TAG_VAL:-prod}"
 
